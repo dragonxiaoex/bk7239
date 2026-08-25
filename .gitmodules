@@ -1,0 +1,3 @@
+[submodule "bk_openthread"]
+	path = bk_openthread
+	url = https://gitlab.bekencorp.com/armino/bk_openthread.git
