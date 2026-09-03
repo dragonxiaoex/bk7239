@@ -69,7 +69,9 @@
 //    WARNING: This option makes it possible to circumvent basic chip security functionality.
 //    Because of this it SHOULD NEVER BE ENABLED IN PRODUCTION BUILDS.
 //
-#define CONFIG_ENABLE_BEKEN_DEVICE_INFO 0
+/* sonoff modify start */
+#define CONFIG_ENABLE_BEKEN_DEVICE_INFO 1
+/* sonoff modify end */
 
 #if CONFIG_ENABLE_BEKEN_DEVICE_INFO
 #define CHIP_DEVICE_CONFIG_ENABLE_TEST_SETUP_PARAMS 0

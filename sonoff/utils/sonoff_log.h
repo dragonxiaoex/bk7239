@@ -31,6 +31,11 @@ do { \
         snf_log_printf("%15s-%04d | "format"\r\n", tag, __LINE__, ##__VA_ARGS__ ); \
 } while (0)
 
+#define LOG_RAW(format, ...) \
+do { \
+        snf_log_printf(format"\r\n", ##__VA_ARGS__ ); \
+} while (0)
+
 #endif /* __SONOFF_LOG_H__ */
 
 

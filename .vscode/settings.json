@@ -22,6 +22,21 @@
         "string": "c",
         "string_view": "c",
         "ranges": "c",
-        "span": "c"
+        "span": "c",
+        "sonoff_wifi_type.h": "c",
+        "thread": "c",
+        "sonoff_project_config.h": "c",
+        "sonoff_task_def.h": "c",
+        "bitset": "c",
+        "initializer_list": "c",
+        "regex": "c",
+        "utility": "c",
+        "sonoff_net_test.h": "c",
+        "bk_ota.h": "c",
+        "*.ipp": "cpp",
+        "condition_variable": "c",
+        "system_error": "c",
+        "freertosconfig.h": "c",
+        "sockets.h": "c"
     }
 }

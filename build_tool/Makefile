@@ -1,6 +1,7 @@
 # Build from this directory:
 #   make MODEL=onoff_plug
 #   make MODEL=onoff_plug SOC=bk7239n
+#   make MODEL=onoff_plug SOC=bk7239n menuconfig
 #   make MODEL=onoff_plug clean
 #   make restore
 
@@ -35,7 +36,7 @@ SONOFF_DIR       := $(ROOT)/sonoff
 PROJECT_SRC     := $(ROOT)/project/$(MODEL)
 PROJECT_DIR     := $(BUILD_DIR)/project_tree/$(MODEL)
 
-.PHONY: all build clean restore help apply_overlay
+.PHONY: all build menuconfig clean restore help apply_overlay
 
 all: build
 
@@ -43,6 +44,7 @@ help:
 	@echo ""
 	@echo "  make MODEL=<name>              build project (default SOC=$(SOC))"
 	@echo "  make MODEL=<name> SOC=bk7239n  build for a specific SoC"
+	@echo "  make MODEL=<name> menuconfig   configure project (default SOC=$(SOC))"
 	@echo "  make MODEL=<name> clean        remove that project's build output"
 	@echo "  make restore                   restore bk_openthread / bk_idk via git"
 	@echo ""
@@ -144,6 +146,25 @@ build:
 	export SONOFF_ROOT="$(ROOT)"; \
 	export MODEL="$(MODEL)"; \
 	$(MAKE) -C "$(SDK_DIR)" $(SOC) \
+		PROJECT="$(MODEL)" \
+		PROJECT_DIR="$(PROJECT_DIR)" \
+		BUILD_DIR="$(BUILD_DIR)"
+
+menuconfig:
+	@set -e; \
+	restore() { $(call restore_sdk); }; \
+	trap restore EXIT; \
+	$(call check_layout); \
+	$(call assemble_project); \
+	$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR)); \
+	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
+	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
+	echo "[sonoff] menuconfig MODEL=$(MODEL) SOC=$(SOC)"; \
+	export SONOFF_ROOT="$(ROOT)"; \
+	export MODEL="$(MODEL)"; \
+	$(MAKE) -C "$(IDK_DIR)" menuconfig \
+		ARMINO_SOC="$(SOC)" \
+		ARMINO_SOC_NAME="$(SOC)" \
 		PROJECT="$(MODEL)" \
 		PROJECT_DIR="$(PROJECT_DIR)" \
 		BUILD_DIR="$(BUILD_DIR)"

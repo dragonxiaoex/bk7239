@@ -1,391 +1,606 @@
 /**
  * @file    sonoff_wifi.c
- * @brief   wifi状态管理模块
- * 
+ * @brief   WIFI状态管理模块
+ *
  * @author  yifei wang (yifei.wang@itead.cc)
- * @date    2026-08-20
- * 
+ * @date    2026-08-25
+ *
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
- * 
+ *
  */
-#include "stdint.h"
-#include "string.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h"
+#include <stdint.h>
+#include <string.h>
+
+#include <FreeRTOS.h>
+#include <queue.h>
+#include <task.h>
+#include <semphr.h>
 
 #include "sonoff_wifi.h"
 #include "sonoff_wifi_adapter.h"
 #include "sonoff_log.h"
 #include "sonoff_task_def.h"
 
-static const char *tag = "wifi";
+static const char *tag = "SNF-WIFI";
 
-#define WIFI_EVT_QUEUE_SIZE                         5
+#define SNF_WIFI_EVENT_QUEUE_SIZE   10U
 
+/**
+ * @brief WIFI管理任务内部事件.
+ */
+typedef enum {
+    /* cmd */
+    SNF_WIFI_EVT_SET_TO_AP = 0,
+    SNF_WIFI_EVT_SET_TO_STA,
+    SNF_WIFI_EVT_SET_TO_IDLE,
+    SNF_WIFI_EVT_DISCONNECT,
+    SNF_WIFI_EVT_SCAN,
 
+    /* callback event */
+    SNF_WIFI_EVT_CB_CONNECTED,
+    SNF_WIFI_EVT_CB_DISCONNECTED,
+    SNF_WIFI_EVT_CB_SCAN_DONE,
+} SnfWifiInternalEventId;
+
+/**
+ * @brief WIFI管理任务事件数据.
+ */
 typedef struct {
-    int id;
-    void *data;
-} SnfWifiEvent;
+    SnfWifiApConfig ap_config;                      /* AP配置 */
+    SnfWifiStaConfig sta_config;                    /* STA配置 */
+    SnfWifiLinkInfo link_info;                      /* STA连接信息 */
+    SnfWifiStaDisconnectedEvent disconnect_event;   /* STA断开信息 */
+} SnfWifiEventData;
 
+/**
+ * @brief WIFI管理任务内部事件消息.
+ */
 typedef struct {
-    TaskHandle_t task_handle;
-    QueueHandle_t evt_queue;
+    int id;                                  /* 事件标识 */
+    SnfWifiEventData data;                   /* 事件数据 */
+} SnfWifiInternalEvent;
 
-    SnfWifiApConfig ap_config;
-    SnfWifiStaConfig sta_config;
-    int cur_mode;
-    int cur_status;
-    int scan_status;
-} SnfWifiManageData;
+/**
+ * @brief WIFI管理任务状态.
+ */
+typedef struct {
+    TaskHandle_t task_handle;                /* 管理任务句柄 */
+    QueueHandle_t event_queue;               /* 管理任务事件队列 */
+    SemaphoreHandle_t mutex;                 /* 信息获取互斥锁 */
+    SnfWifiApConfig ap_config;               /* 当前AP配置 */
+    SnfWifiStaConfig sta_config;             /* 当前STA配置 */
+    SnfWifiLinkInfo link_info;               /* 当前STA连接信息 */
+    SnfWifiManageMode mode;                  /* 当前工作模式 */
+    int link_status;                         /* 当前链路状态 */
+    int scan_status;                         /* 当前扫描状态 */
+    SnfWifiEventCB event_callback;           /* 事件回调 */
+    void *event_user_data;                   /* 事件回调用户数据 */
+} SnfWifiManageState;
 
-static SnfWifiManageData wifi_manage_data = {
+static SnfWifiManageState wifi_manage_state = {
     .task_handle = NULL,
-    .evt_queue = NULL,
-    .ap_config = {0},
-    .sta_config = {0},
-    .cur_mode = SNF_WIFI_MODE_NONE,
-    .cur_status = SNF_WIFI_IDLE,
+    .event_queue = NULL,
+    .mutex = NULL,
+    .ap_config = {
+        .ssid = "",
+        .password = "",
+        .channel = 0,
+        .max_connections = 0,
+        .security = SNF_WIFI_SECURITY_OPEN,
+    },
+    .sta_config = {
+        .ssid = "",
+        .password = "",
+    },
+    .link_info = {
+        .ssid = "",
+        .bssid = {0},
+        .rssi = 0,
+        .channel = 0,
+        .security = SNF_WIFI_SECURITY_UNKNOWN,
+    },
+    .mode = SNF_WIFI_MANAGE_MODE_IDLE,
+    .link_status = SNF_WIFI_LINK_IDLE,
     .scan_status = 0,
+    .event_callback = NULL,
+    .event_user_data = NULL,
 };
 
-static void snfWifiTestCallback(SnfWifiAdapterEvt event, const void *event_data, void *user_data)
+static int snfWifiEventSend(const SnfWifiInternalEvent *event)
 {
-    switch(event)
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+
+    if ((event == NULL) || (manage_state->event_queue == NULL))
+    {
+        LOG_E(tag, "wifi event queue not init");
+        return -1;
+    }
+
+    if (xQueueSend(manage_state->event_queue, event, 0) != pdPASS)
+    {
+        LOG_E(tag, "wifi event queue send failed");
+        return -2;
+    }
+
+    return 0;
+}
+
+static int snfWifiMutexTake(void)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+
+    if (xSemaphoreTake(manage_state->mutex, portMAX_DELAY) != pdPASS)
+    {
+        LOG_E(tag, "get mutex failed");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int snfWifiMutexGive(void)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+
+    if (xSemaphoreGive(manage_state->mutex) != pdPASS)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static void snfWifiAdapterEventCallback(int adapter_event, const void *event_data, void *user_data)
+{
+    SnfWifiInternalEvent event = {0};
+    int event_id = 0;
+
+    switch (adapter_event)
     {
         case SNF_WIFI_ADP_EVT_CONNECTED:
-            LOG_I(tag, "snfWifiAdapterTestCallback connected");
+            event_id = SNF_WIFI_EVT_CB_CONNECTED;
+            if (event_data != NULL)
+            {
+                memcpy(&event.data.link_info, event_data, sizeof(event.data.link_info));
+            }
             break;
         case SNF_WIFI_ADP_EVT_DISCONNECTED:
-            LOG_I(tag, "snfWifiAdapterTestCallback disconnected");
+            event_id = SNF_WIFI_EVT_CB_DISCONNECTED;
+            if (event_data != NULL)
+            {
+                memcpy(&event.data.disconnect_event, event_data,
+                       sizeof(event.data.disconnect_event));
+            }
             break;
         case SNF_WIFI_ADP_EVT_SCAN_DONE:
-            LOG_I(tag, "snfWifiAdapterTestCallback scan done");
-            break;
-        case SNF_WIFI_ADP_EVT_AP_STARTED:
-            LOG_I(tag, "snfWifiAdapterTestCallback ap started");
-            break;
-        case SNF_WIFI_ADP_EVT_AP_STOPPED:
-            LOG_I(tag, "snfWifiAdapterTestCallback ap stopped");
-            break;
-        case SNF_WIFI_ADP_EVT_AP_CLIENT_CONNECTED:
-        {
-            const SnfWifiApClientEvent *client_event = (const SnfWifiApClientEvent *)event_data;
-            LOG_I(tag, "snfWifiAdapterTestCallback ap client connected, mac: %02x:%02x:%02x:%02x:%02x:%02x, ip: %d.%d.%d.%d", 
-                        client_event->mac[0], client_event->mac[1], client_event->mac[2], 
-                        client_event->mac[3], client_event->mac[4], client_event->mac[5], 
-                        (client_event->ip_addr >> 24) & 0xFF, (client_event->ip_addr >> 16) & 0xFF, 
-                        (client_event->ip_addr >> 8) & 0xFF, client_event->ip_addr & 0xFF);
-            break;
-        } 
-        case SNF_WIFI_ADP_EVT_AP_CLIENT_DISCONNECTED:
-            LOG_I(tag, "snfWifiAdapterTestCallback ap client disconnected");
+            event_id = SNF_WIFI_EVT_CB_SCAN_DONE;
             break;
         default:
             break;
     }
+
+    if (event_id != 0)
+    {
+        event.id = event_id;
+        snfWifiEventSend(&event);
+    }
 }
 
-void snfWifiTest(void)
+static void eventCallback(SnfWifiExternalEventId event, const void *event_data)
 {
-    SnfWifiApConfig ap_config;
-    int ret = SNF_WIFI_ADAPTER_OK;
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    SnfWifiEventCB callback = manage_state->event_callback;
+    void *user_data = manage_state->event_user_data;
 
-    strncpy(ap_config.ssid, "axRzon", sizeof(ap_config.ssid));
-    strncpy(ap_config.password, "12345678", sizeof(ap_config.password));
-    ap_config.channel = 1;
-    ap_config.max_connections = 2;
-    ap_config.security = SNF_WIFI_SECURITY_WPA2;
-
-    ret = snfWifiAdapterInit();
-    if(ret != SNF_WIFI_ADAPTER_OK)
+    if (callback != NULL)
     {
-        LOG_E(tag, "snfWifiAdapterInit failed, ret=%d", ret);
-        return;
+        callback(event, event_data, user_data);
     }
-
-    ret = snfWifiAdapterRegisterEventCallback(snfWifiTestCallback, NULL);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterRegisterEventCallback failed, ret=%d", ret);
-        return;
-    }
-
-    ret = snfWifiAdapterApSetConfig(&ap_config);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterApSetConfig failed, ret=%d", ret);
-        return;
-    }
-
-    /* ret = snfWifiAdapterSetMode(SNF_WIFI_MODE_AP);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterSetMode failed, ret=%d", ret);
-        return;
-    }
-
-    LOG_I(tag, "snfWifiAdapterTest success"); */
-
-    SnfWifiStaConfig sta_config;
-    //int ret = SNF_WIFI_ADAPTER_OK;
-
-    strncpy(sta_config.ssid, "ROG_2G4", sizeof(sta_config.ssid));
-    strncpy(sta_config.password, "dokidokideath", sizeof(sta_config.password));
-
-    /* ret = snfWifiAdapterInit();
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterInit failed, ret=%d", ret);
-        return;
-    }
-
-    ret = snfWifiAdapterRegisterEventCallback(snfWifiTestCallback, NULL);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterRegisterEventCallback failed, ret=%d", ret);
-        return;
-    } */
-
-    snfWifiAdapterStaSetConfig(&sta_config);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterStaSetConfig failed, ret=%d", ret);
-        return;
-    }
-
-    ret = snfWifiAdapterSetMode(SNF_WIFI_MODE_AP_STA);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterSetMode failed, ret=%d", ret);
-        return;
-    }
-
-    ret = snfWifiAdapterStaConnect();
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "snfWifiAdapterStaConnect failed, ret=%d", ret);
-        return;
-    }
-
-    LOG_I(tag, "snfWifiAdapterTest success");
 }
 
-
-static int wifiApStart(SnfWifiApConfig *config)
+static void snfWifiProcessEvent(const SnfWifiInternalEvent *event)
 {
-    int ret = SNF_WIFI_ADAPTER_OK;
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    int adapter_error;
 
-    ret = snfWifiAdapterApSetConfig(config);
-    if(ret != SNF_WIFI_ADAPTER_OK)
+    if (event == NULL)
     {
-        LOG_E(tag, "ap set config failed, ret=%d", ret);
+        return;
+    }
+
+    switch (event->id)
+    {
+        case SNF_WIFI_EVT_SET_TO_AP:
+        {
+            adapter_error = snfWifiAdapterApSetConfig(&event->data.ap_config);
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                LOG_E(tag, "ap set config failed, ret=%d", adapter_error);
+                break;
+            }
+
+            adapter_error = snfWifiAdapterSetMode(SNF_WIFI_MODE_AP);
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                LOG_E(tag, "ap set mode failed, ret=%d", adapter_error);
+                break;
+            }
+
+            snfWifiMutexTake();
+            memcpy(&manage_state->ap_config, &event->data.ap_config,
+                   sizeof(manage_state->ap_config));
+            memset(&manage_state->link_info, 0, sizeof(manage_state->link_info));
+            manage_state->mode = SNF_WIFI_MANAGE_MODE_AP;
+            manage_state->link_status = SNF_WIFI_LINK_IDLE;
+            snfWifiMutexGive();
+
+            eventCallback(SNF_WIFI_EVT_AP_STARTED, NULL);
+            break;
+        }
+
+        case SNF_WIFI_EVT_SET_TO_STA:
+        {
+            adapter_error = snfWifiAdapterStaSetConfig(&event->data.sta_config);
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                LOG_E(tag, "sta set config failed, ret=%d", adapter_error);
+                break;
+            }
+
+            adapter_error = snfWifiAdapterSetMode(SNF_WIFI_MODE_STA);
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                LOG_E(tag, "sta set mode failed, ret=%d", adapter_error);
+                break;
+            }
+
+            snfWifiMutexTake();
+            memcpy(&manage_state->sta_config, &event->data.sta_config,
+                   sizeof(manage_state->sta_config));
+            memset(&manage_state->link_info, 0, sizeof(manage_state->link_info));
+            manage_state->mode = SNF_WIFI_MANAGE_MODE_STA;
+            manage_state->link_status = SNF_WIFI_LINK_CONNECTING;
+
+            adapter_error = snfWifiAdapterStaConnect();
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                manage_state->link_status = SNF_WIFI_LINK_DISCONNECTED;
+                LOG_E(tag, "sta connect failed, ret=%d", adapter_error);
+            }
+            snfWifiMutexGive();
+
+            eventCallback(SNF_WIFI_EVT_STA_CONNECTING, NULL);
+            break;
+        }
+
+        case SNF_WIFI_EVT_SET_TO_IDLE:
+        {
+            adapter_error = snfWifiAdapterSetMode(SNF_WIFI_MODE_NONE);
+            if (adapter_error != SNF_WIFI_ADAPTER_OK)
+            {
+                LOG_E(tag, "set wifi idle failed, ret=%d", adapter_error);
+                break;
+            }
+
+            snfWifiMutexTake();
+            manage_state->mode = SNF_WIFI_MANAGE_MODE_IDLE;
+            memset(&manage_state->link_info, 0, sizeof(manage_state->link_info));
+            manage_state->link_status = SNF_WIFI_LINK_IDLE;
+            snfWifiMutexGive();
+            break;
+        }
+
+        case SNF_WIFI_EVT_DISCONNECT:
+        {
+            snfWifiMutexTake();
+            if (manage_state->mode == SNF_WIFI_MANAGE_MODE_STA)
+            {
+                adapter_error = snfWifiAdapterStaDisconnect();
+                if (adapter_error == SNF_WIFI_ADAPTER_OK)
+                {
+                    memset(&manage_state->link_info, 0, sizeof(manage_state->link_info));
+                    manage_state->link_status = SNF_WIFI_LINK_DISCONNECTING;
+                }
+                else
+                {
+                    LOG_E(tag, "sta disconnect failed, ret=%d", adapter_error);
+                }
+            }
+            snfWifiMutexGive();
+            break;
+        }
+
+        case SNF_WIFI_EVT_SCAN:
+        {
+            adapter_error = snfWifiAdapterScan();
+            snfWifiMutexTake();
+            if (adapter_error == SNF_WIFI_ADAPTER_OK)
+            {
+                manage_state->scan_status = 1;
+            }
+            else
+            {
+                LOG_E(tag, "wifi scan failed, ret=%d", adapter_error);
+            }
+            snfWifiMutexGive();
+            break;
+        }  
+
+        case SNF_WIFI_EVT_CB_CONNECTED:
+        {
+            snfWifiMutexTake();
+            memcpy(&manage_state->link_info, &event->data.link_info,
+                    sizeof(manage_state->link_info));
+            manage_state->link_status = SNF_WIFI_LINK_CONNECTED;
+            snfWifiMutexGive();
+
+            eventCallback(SNF_WIFI_EVT_STA_CONNECTED, &event->data.link_info);
+            break;
+        } 
+
+        case SNF_WIFI_EVT_CB_DISCONNECTED:
+        {
+            snfWifiMutexTake();
+            memset(&manage_state->link_info, 0, sizeof(manage_state->link_info));
+            manage_state->link_status = SNF_WIFI_LINK_DISCONNECTED;
+            snfWifiMutexGive();
+
+            eventCallback(SNF_WIFI_EVT_STA_DISCONNECTED, NULL);
+            break;
+        }
+
+        case SNF_WIFI_EVT_CB_SCAN_DONE:
+        {
+            snfWifiMutexTake();
+            manage_state->scan_status = 0;
+            snfWifiMutexGive();
+
+            eventCallback(SNF_WIFI_EVT_SCAN_DONE, NULL);
+            break;
+        }
+            
+        default:
+            LOG_W(tag, "unknown wifi event id: %d", event->id);
+            break;
+    }
+}
+
+int snfWifiGetMode(void)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    int mode = SNF_WIFI_MANAGE_MODE_IDLE;
+
+    snfWifiMutexTake();
+    mode = manage_state->mode;
+    snfWifiMutexGive();
+
+    return mode;
+}
+
+int snfWifiStaConnect(const SnfWifiStaConfig *config)
+{
+    SnfWifiInternalEvent event = {0};
+
+    if (config == NULL)
+    {
         return -1;
     }
 
-    ret = snfWifiAdapterSetMode(SNF_WIFI_MODE_AP);
-    if(ret != SNF_WIFI_ADAPTER_OK)
+    event.id = SNF_WIFI_EVT_SET_TO_STA;
+    memcpy(&event.data.sta_config, config, sizeof(event.data.sta_config));
+
+    return snfWifiEventSend(&event);
+}
+
+int snfWifiStaDisconnect(void)
+{
+    SnfWifiInternalEvent event = {0};
+
+    event.id = SNF_WIFI_EVT_DISCONNECT;
+
+    return snfWifiEventSend(&event);
+}
+
+int snfWifiStaGetLinkInfo(SnfWifiLinkInfo *info)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+
+    if (info == NULL)
     {
-        LOG_E(tag, "ap set mode failed, ret=%d", ret);
+        return -1;
+    }
+
+    snfWifiMutexTake();
+    if ((manage_state->mode != SNF_WIFI_MANAGE_MODE_STA)
+        || (manage_state->link_status != SNF_WIFI_LINK_CONNECTED))
+    {
+        LOG_E(tag, "sta not connected");
+        snfWifiMutexGive();
+
         return -2;
     }
+    
+    memcpy(info, &manage_state->link_info, sizeof(manage_state->link_info));
+    snfWifiMutexGive();
 
     return 0;
 }
 
-static int wifiStaStart(SnfWifiStaConfig *config)
+int snfWifiStaGetRssi(int *rssi)
 {
-    int ret = SNF_WIFI_ADAPTER_OK;
-
-    ret = snfWifiAdapterStaSetConfig(config);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "sta set config failed, ret=%d", ret);
-        return -1;
-    }
-
-    ret = snfWifiAdapterSetMode(SNF_WIFI_MODE_STA);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "sta set mode failed, ret=%d", ret);
-        return -2;
-    }
-
-    ret = snfWifiAdapterStaConnect();
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "sta connect failed, ret=%d", ret);
-        return -3;
-    }
-
-    return 0;
-}
-
-static int wifiIdle(void)
-{
-    int ret = SNF_WIFI_ADAPTER_OK;
-
-    ret = snfWifiAdapterSetMode(SNF_WIFI_MODE_NONE);
-    if(ret != SNF_WIFI_ADAPTER_OK)
-    {
-        LOG_E(tag, "set mode failed, ret=%d", ret);
-        return -1;
-    }
-
-    return 0;
-}
-
-int snfWifiEventSend(int id, void *data)
-{
-    SnfWifiManageData *wifi_data = &wifi_manage_data;
-
-    if (!wifi_data->evt_queue) {
-        LOG_E(tag, "event queue not init");
-        return -1;
-    }
-
-    SnfWifiEvent event;
-    event.id = id;
-    event.data = data;
-
-    if (xQueueSend(wifi_data->evt_queue, (void *)&event, 5) != pdPASS) {
-        LOG_E(tag, "event queue send failed");
-        return -2;
-    }
-
-    return 0;
-}
-
-void snfWifiTask(void *arg)
-{
-    SnfWifiManageData *wifi_data = &wifi_manage_data;
-    SnfWifiEvent event;
     int ret = 0;
 
-    while(1)
+    if (rssi == NULL)
     {
-        memset(&event, 0, sizeof(SnfWifiEvent));
+        return -1;
+    }
 
-        if (xQueueReceive(wifi_data->evt_queue, (void *)&event, 1000 / portTICK_PERIOD_MS) == pdPASS) {
-            LOG_I(tag, "event id: %d", event.id);
+    snfWifiMutexTake();
+    if(snfWifiAdapterStaGetRssi(rssi) != SNF_WIFI_ADAPTER_OK)
+    {
+        LOG_E(tag, "get rssi failed");
+        ret = -3;
+    }
+    snfWifiMutexGive();
 
-            switch (event.id)
-            {
-                case SNF_WIFI_EVT_SET_TO_AP:
-                {
-                    if(event.data == NULL)
-                    {
-                        break;
-                    }
+    return ret;
+}
 
-                    if(wifi_data->cur_mode == SNF_WIFI_MODE_AP)
-                    {
-                        LOG_I(tag, "ap has started, will change config restart");
-                    }
+int snfWifiApStart(const SnfWifiApConfig *config)
+{
+    SnfWifiInternalEvent event = {0};
 
-                    memcpy(&wifi_data->ap_config, (SnfWifiApConfig *)event.data, sizeof(SnfWifiApConfig));
+    if (config == NULL)
+    {
+        return -1;
+    }
 
-                    ret = wifiApStart(&wifi_data->ap_config);
-                    if(ret != 0)
-                    {
-                        LOG_E(tag, "ap start failed");
-                        break;
-                    }
+    event.id = SNF_WIFI_EVT_SET_TO_AP;
+    memcpy(&event.data.ap_config, config, sizeof(event.data.ap_config));
 
-                    wifi_data->cur_mode = SNF_WIFI_MODE_AP;
-                    break;
-                }
+    return snfWifiEventSend(&event);
+}
 
-                case SNF_WIFI_EVT_SET_TO_STA:
-                {
-                    if(event.data == NULL)
-                    {
-                        break;
-                    }
+int snfWifiApStop(void)
+{
+    SnfWifiInternalEvent event = {0};
 
-                    memcpy(&wifi_data->sta_config, (SnfWifiStaConfig *)event.data, sizeof(SnfWifiStaConfig));
+    event.id = SNF_WIFI_EVT_SET_TO_IDLE;
 
-                    ret = wifiStaStart(&wifi_data->sta_config);
-                    if(ret != 0)
-                    {
-                        LOG_E(tag, "sta start failed, ret=%d", ret);
-                        break;
-                    }
+    return snfWifiEventSend(&event);
+}
 
-                    wifi_data->cur_mode = SNF_WIFI_MODE_STA;
-                    break;
-                }
+int snfWifiScan(void)
+{
+    SnfWifiInternalEvent event = {0};
 
-                case SNF_WIFI_EVT_SET_TO_IDLE:
-                {
-                    ret = wifiIdle();
-                    if(ret != 0)
-                    {
-                        LOG_E(tag, "idle failed, ret=%d", ret);
-                        break;
-                    }
+    event.id = SNF_WIFI_EVT_SCAN;
 
-                    wifi_data->cur_mode = SNF_WIFI_MODE_NONE;
-                    wifi_data->cur_status = SNF_WIFI_IDLE;
-                    break;
-                }
+    return snfWifiEventSend(&event);
+}
 
-                case SNF_WIFI_EVT_DISCONNECT:
-                {
-                    if(wifi_data->cur_mode == SNF_WIFI_MODE_STA)
-                    {
-                        snfWifiAdapterStaDisconnect();
-                    }
+int snfWifiScanStatus(void)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
 
-                    wifi_data->cur_status = SNF_WIFI_DISCONNECTED;
-                    break;
-                }
+    return manage_state->scan_status;
+}
 
-                case SNF_WIFI_EVT_SCAN:
-                {
-                    break;
-                }
+int snfWifiScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count, uint16_t *result_count)
+{
+    int ret = 0;
+    snfWifiMutexTake();
+    if (snfWifiAdapterScanGetResults(results, max_count, result_count) != SNF_WIFI_ADAPTER_OK)
+    {
+        LOG_E(tag, "get scan results failed");
+        ret = -1;
+    }
+    snfWifiMutexGive();
 
-                default:
-                    LOG_I(tag, "unknown event id: %d", event.id);
-                    break;
-            }
-        }
-        else 
+    return ret;
+}
+
+int snfWifiGetLinkStatus(void)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    int link_status = 0;
+
+    snfWifiMutexTake();
+    link_status = manage_state->link_status;
+    snfWifiMutexGive();
+
+    return link_status;
+}
+
+int snfWifiRegisterEventCallback(SnfWifiEventCB callback, void *user_data)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+
+    if (manage_state->event_callback != NULL)
+    {
+        LOG_E(tag, "event callback already registered");
+        return -1;
+    }
+
+    if (callback == NULL)
+    {
+        LOG_E(tag, "event callback is NULL");
+        return -2;
+    }
+
+    manage_state->event_callback = callback;
+    manage_state->event_user_data = user_data;
+
+    return 0;
+}
+
+static void snfWifiTask(void *arg)
+{
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    SnfWifiInternalEvent event;
+
+    while (1)
+    {
+        memset(&event, 0, sizeof(event));
+        if (xQueueReceive(manage_state->event_queue, &event, portMAX_DELAY) == pdPASS)
         {
-            /* poll wifi status */
+            LOG_I(tag, "event id: %d", event.id);
+            snfWifiProcessEvent(&event);
         }
-
-
-
-        
     }
 }
 
 int snfWifiInit(void)
 {
-    SnfWifiManageData *wifi_data = &wifi_manage_data;
-    if(!wifi_data->task_handle)
+    SnfWifiManageState *manage_state = &wifi_manage_state;
+    int adapter_error = SNF_WIFI_ADAPTER_OK;
+    
+    if (manage_state->event_queue == NULL)
     {
-        if( xTaskCreate(snfWifiTask,
-                        SONOFF_WIFI_TASK_NAME,
-                        SONOFF_WIFI_TASK_STACKSIZE,
-                        NULL,
-                        SONOFF_WIFI_TASK_PRIO,
-                        &wifi_data->task_handle) != pdPASS ) 
+        manage_state->event_queue = xQueueCreate(SNF_WIFI_EVENT_QUEUE_SIZE, sizeof(SnfWifiInternalEvent));
+
+        if (manage_state->event_queue == NULL)
         {
-            LOG_E(tag, "task init failed");
+            LOG_E(tag, "event queue init failed");
             return -1;
         }
     }
 
-    if (!wifi_data->evt_queue) {
-        wifi_data->evt_queue = xQueueCreate(WIFI_EVT_QUEUE_SIZE, sizeof(wifi_event_t));
+    if (manage_state->mutex == NULL)
+    {
+        manage_state->mutex = xSemaphoreCreateMutex();
+        if (manage_state->mutex == NULL)
+        {
+            LOG_E(tag, "mutex init failed");
+            return -2;
+        }
+    }
 
-        if (wifi_data->evt_queue == NULL) {
-            LOG_E(tag, "event queue init failed");
-            return -1;
+    adapter_error = snfWifiAdapterInit();
+    if (adapter_error != SNF_WIFI_ADAPTER_OK)
+    {
+        LOG_E(tag, "wifi adapter init failed, ret=%d", adapter_error);
+        return -2;
+    }
+
+    adapter_error = snfWifiAdapterRegisterEventCallback(snfWifiAdapterEventCallback, NULL);
+    if (adapter_error != SNF_WIFI_ADAPTER_OK)
+    {
+        LOG_E(tag, "wifi adapter callback register failed, ret=%d", adapter_error);
+        return -3;
+    }
+
+    if (manage_state->task_handle == NULL)
+    {
+        if (xTaskCreate(snfWifiTask,
+                    SONOFF_WIFI_TASK_NAME,
+                    SONOFF_WIFI_TASK_STACKSIZE,
+                    NULL,
+                    SONOFF_WIFI_TASK_PRIO,
+                    &manage_state->task_handle) != pdPASS)
+        {
+            LOG_E(tag, "wifi task init failed");
+            return -4;
         }
     }
 

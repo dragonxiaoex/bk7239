@@ -1,6 +1,13 @@
 #ifndef __SONOFF_PROJECT_CONFIG_H__
 #define __SONOFF_PROJECT_CONFIG_H__
 
-#define SONOFF_DEVICE_MODEL         "onoff_plug"
+#define SONOFF_DEVICE_MODEL                     "onoff_plug"
+
+#define SONOFF_SOFTWARE_VERSION_STRING          "1.1.2"
+
+#define SONOFF_MATTER_SOFTWARE_VERSION          1
+#define SONOFF_MATTER_SOFTWARE_VERSION_STRING   "1.1.1"
+#define SONOFF_MATTER_HARDWARE_VERSION          1
+#define SONOFF_MATTER_HARDWARE_VERSION_STRING   "1.1.1"
 
 #endif /* __SONOFF_PROJECT_CONFIG_H__ */

@@ -13,113 +13,143 @@
 
 #include <stdint.h>
 
-#define SNF_WIFI_SSID_MAX_LEN               32
-#define SNF_WIFI_PASSWORD_MAX_LEN           64
+#include "sonoff_wifi_type.h"
 
+/**
+ * @brief WIFI适配模块状态码.
+ */
 typedef enum {
-    SNF_WIFI_ADAPTER_OK = 0,
-    SNF_WIFI_ADAPTER_ERR_INVALID_PARAM,
-    SNF_WIFI_ADAPTER_ERR_NOT_INIT,
-    SNF_WIFI_ADAPTER_ERR_BUSY,
-    SNF_WIFI_ADAPTER_ERR_TIMEOUT,
-    SNF_WIFI_ADAPTER_ERR_NOT_SUPPORTED,
-    SNF_WIFI_ADAPTER_ERR_INTERNAL,
+    SNF_WIFI_ADAPTER_OK = 0,              /**< 成功. */
+    SNF_WIFI_ADAPTER_ERR_INVALID_PARAM,   /**< 参数无效. */
+    SNF_WIFI_ADAPTER_ERR_NOT_INIT,        /**< 模块未初始化. */
+    SNF_WIFI_ADAPTER_ERR_BUSY,            /**< 操作忙. */
+    SNF_WIFI_ADAPTER_ERR_TIMEOUT,         /**< 操作超时. */
+    SNF_WIFI_ADAPTER_ERR_NOT_SUPPORTED,   /**< 功能不支持. */
+    SNF_WIFI_ADAPTER_ERR_INTERNAL,        /**< 内部错误. */
 } SnfWifiAdapterErr;
 
+/**
+ * @brief WIFI适配模块事件.
+ */
 typedef enum {
-    SNF_WIFI_MODE_NONE = 0,
-    SNF_WIFI_MODE_STA,
-    SNF_WIFI_MODE_AP,
-    SNF_WIFI_MODE_AP_STA,
-} SnfWifiAdapterMode;
-
-typedef enum {
-    SNF_WIFI_ADP_EVT_CONNECTED = 0,
-    SNF_WIFI_ADP_EVT_DISCONNECTED,
-    SNF_WIFI_ADP_EVT_SCAN_DONE,
-    SNF_WIFI_ADP_EVT_AP_STARTED,
-    SNF_WIFI_ADP_EVT_AP_STOPPED,
-    SNF_WIFI_ADP_EVT_AP_CLIENT_CONNECTED,
-    SNF_WIFI_ADP_EVT_AP_CLIENT_DISCONNECTED,
+    SNF_WIFI_ADP_EVT_CONNECTED = 0,           /**< STA已连接. */
+    SNF_WIFI_ADP_EVT_DISCONNECTED,            /**< STA已断开. */
+    SNF_WIFI_ADP_EVT_SCAN_DONE,               /**< 扫描完成. */
+    SNF_WIFI_ADP_EVT_AP_STARTED,              /**< AP已启动. */
+    SNF_WIFI_ADP_EVT_AP_STOPPED,              /**< AP已停止. */
+    SNF_WIFI_ADP_EVT_AP_CLIENT_CONNECTED,     /**< AP客户端已接入. */
+    SNF_WIFI_ADP_EVT_AP_CLIENT_DISCONNECTED,  /**< AP客户端已断开. */
 } SnfWifiAdapterEvt;
 
-typedef enum {
-    SNF_WIFI_SECURITY_OPEN,
-    SNF_WIFI_SECURITY_WEP,
-    SNF_WIFI_SECURITY_WPA,
-    SNF_WIFI_SECURITY_WPA2,
-    SNF_WIFI_SECURITY_WPA3,
-    SNF_WIFI_SECURITY_UNKNOWN,
-} SnfWifiSecurity;
-
-typedef struct {
-    char ssid[SNF_WIFI_SSID_MAX_LEN + 1];
-    char password[SNF_WIFI_PASSWORD_MAX_LEN + 1];
-} SnfWifiStaConfig;
-
-typedef struct {
-    char ssid[SNF_WIFI_SSID_MAX_LEN + 1];
-    uint8_t bssid[6];
-    int rssi;
-    uint8_t channel;
-    SnfWifiSecurity security;
-} SnfWifiLinkInfo;
-
-typedef struct {
-    char ssid[SNF_WIFI_SSID_MAX_LEN + 1];
-    char password[SNF_WIFI_PASSWORD_MAX_LEN + 1];
-    uint8_t channel;                                /* AP工作信道 */
-    uint8_t max_connections;                        /* AP最大客户端数量 */
-    SnfWifiSecurity security;                       /* AP安全类型 */
-} SnfWifiApConfig;
-
-typedef enum {
-    SNF_WIFI_DISCONNECT_REASON_UNKNOWN = 0,
-    SNF_WIFI_DISCONNECT_REASON_USER,
-    SNF_WIFI_DISCONNECT_REASON_AUTH_FAILED,
-    SNF_WIFI_DISCONNECT_REASON_AP_NOT_FOUND,
-    SNF_WIFI_DISCONNECT_REASON_ASSOC_FAILED,
-    SNF_WIFI_DISCONNECT_REASON_HANDSHAKE_TIMEOUT,
-    SNF_WIFI_DISCONNECT_REASON_BEACON_LOST,
-    SNF_WIFI_DISCONNECT_REASON_AP_DISCONNECTED,
-} SnfWifiDisconnectReason;
-
-typedef struct {
-    SnfWifiDisconnectReason reason;
-} SnfWifiStaDisconnectedEvent;
-
 /**
- * @brief AP客户端事件信息
- */
-typedef struct {
-    uint8_t mac[6];
-    uint32_t ip_addr;
-} SnfWifiApClientEvent;
-
-/**
- * @brief WIFI适配模块事件回调
+ * @brief 初始化WIFI适配模块.
  *
- * @param [in] event - 事件类型.
- * @param [in] event_data - 事件数据或 NULL.
- * @param [in] user_data - 用户数据, 在注册时提供.
+ * @return WIFI适配模块状态码.
  */
-typedef void (*SnfWifiAdapterEventCB)(SnfWifiAdapterEvt event, const void *event_data, void *user_data);
-
 int snfWifiAdapterInit(void);
+
+/**
+ * @brief 反初始化WIFI适配模块.
+ *
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterDeinit(void);
-int snfWifiAdapterSetMode(SnfWifiAdapterMode mode);
+
+/**
+ * @brief 设置WIFI工作模式.
+ *
+ * AP须先调用snfWifiAdapterApSetConfig；STA仅启动接口, 不会自动连接.
+ *
+ * @param [in] mode - WIFI工作模式.
+ * @return WIFI适配模块状态码.
+ */
+int snfWifiAdapterSetMode(SnfWifiMode mode);
+
+/**
+ * @brief 获取当前WIFI工作模式.
+ *
+ * @return 当前WIFI工作模式, 未初始化时返回SNF_WIFI_MODE_NONE.
+ */
 int snfWifiAdapterGetMode(void);
 
+/**
+ * @brief 配置STA连接参数.
+ *
+ * @param [in] config - STA配置参数.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaSetConfig(const SnfWifiStaConfig *config);
+
+/**
+ * @brief 获取STA连接参数.
+ *
+ * @param [out] config - STA配置参数.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaGetConfig(SnfWifiStaConfig *config);
+
+/**
+ * @brief 使用已配置参数连接STA.
+ *
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaConnect(void);
+
+/**
+ * @brief 断开STA与当前AP的连接.
+ *
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaDisconnect(void);
+
+/**
+ * @brief 获取当前STA连接信息.
+ *
+ * @param [out] info - STA连接信息.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaGetLinkInfo(SnfWifiLinkInfo *info);
+
+/**
+ * @brief 获取当前STA信号强度.
+ *
+ * @param [out] rssi - RSSI值, 单位为dBm.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterStaGetRssi(int *rssi);
 
+/**
+ * @brief 启动异步WIFI扫描.
+ *
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterScan(void);
+
+/**
+ * @brief 获取最近一次WIFI扫描结果.
+ *
+ * @param [out] results - 扫描结果数组.
+ * @param [in] max_count - results可容纳的最大结果数.
+ * @param [out] result_count - 实际写入results的结果数.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count, uint16_t *result_count);
+
+/**
+ * @brief 配置软件AP.
+ *
+ * @param [in] config - AP配置参数.
+ * @return WIFI适配模块状态码.
+ */
 int snfWifiAdapterApSetConfig(const SnfWifiApConfig *config);
 
-int snfWifiAdapterRegisterEventCallback(SnfWifiAdapterEventCB callback, void *user_data);
-#endif /* __SONOFF_WIFI_ADAPTER_H__ */
+/**
+ * @brief 注册应用事件回调.
+ *
+ * @param [in] callback - WIFI适配模块事件回调.
+ * @param [in] user_data - 传递给回调函数的用户数据.
+ * @return WIFI适配模块状态码.
+ */
+int snfWifiAdapterRegisterEventCallback(SnfWifiEventCB callback, void *user_data);
+
+#endif /* #ifndef __SONOFF_WIFI_ADAPTER_H__ */

@@ -22,23 +22,43 @@
 
 #include "sonoff_wifi_adapter.h"
 
+/**
+ * @brief AP默认IPv4地址.
+ */
 #define SNF_DEFAULT_AP_IP_ADDR     "192.168.100.1"
+
+/**
+ * @brief AP默认子网掩码.
+ */
 #define SNF_DEFAULT_AP_NETMASK     "255.255.255.0"
+
+/**
+ * @brief AP默认网关地址.
+ */
 #define SNF_DEFAULT_AP_GATEWAY     "192.168.100.1"
+
+/**
+ * @brief AP默认DNS地址.
+ */
 #define SNF_DEFAULT_AP_DNS         "192.168.100.1"
 
+/* SDK内部接口, 用于判断WIFI是否已初始化. */
 extern bool bk_get_wifi_is_inited(void);
 
+/**
+ * @brief WIFI适配模块内部状态.
+ */
 typedef struct {
-    int init;                              /* 适配器初始化状态 */
-    int sta_started;                       /* STA启动状态 */
-    int ap_started;                        /* AP启动状态 */
-    int scan_started;                      /* 扫描启动状态 */
-    SnfWifiAdapterMode mode;               /* WIFI工作模式 */
-    SnfWifiAdapterEventCB event_callback;  /* 适配器事件回调 */
-    void *event_user_data;                 /* 适配器事件回调用户数据 */
+    int init;                               /* 适配器初始化状态 */
+    int sta_started;                        /* STA启动状态 */
+    int ap_started;                         /* AP启动状态 */
+    int scan_started;                       /* 扫描启动状态 */
+    SnfWifiMode mode;                       /* WIFI工作模式 */
+    SnfWifiEventCB event_callback;          /* 适配器事件回调 */
+    void *event_user_data;                  /* 适配器事件回调用户数据 */
 } SnfWifiAdapterState;
 
+/* WIFI适配模块运行状态. */
 static SnfWifiAdapterState adapter_state = {
     .init = 0,
     .sta_started = 0,
@@ -49,6 +69,15 @@ static SnfWifiAdapterState adapter_state = {
     .event_user_data = NULL,
 };
 
+/**
+ * @brief 校验字符串长度是否合法.
+ *
+ * @param [in] value - 待校验字符串.
+ * @param [in] value_size - 缓冲区大小.
+ * @param [in] max_length - 允许的最大有效长度.
+ * @param [out] length - 实际字符串长度.
+ * @return 0表示成功, 负数表示失败.
+ */
 static int snfValidateString(const char *value, size_t value_size, size_t max_length, size_t *length)
 {
     size_t value_length;
@@ -69,6 +98,12 @@ static int snfValidateString(const char *value, size_t value_size, size_t max_le
     return 0;
 }
 
+/**
+ * @brief 将SDK错误码映射为适配模块状态码.
+ *
+ * @param [in] sdk_error - SDK错误码.
+ * @return WIFI适配模块状态码.
+ */
 static int snfMapSdkError(bk_err_t sdk_error)
 {
     int adapter_error = SNF_WIFI_ADAPTER_ERR_INTERNAL;
@@ -112,6 +147,11 @@ static int snfMapSdkError(bk_err_t sdk_error)
     return adapter_error;
 }
 
+/**
+ * @brief 检查适配模块是否已初始化.
+ *
+ * @return WIFI适配模块状态码.
+ */
 static int snfInitStateGet(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -124,6 +164,12 @@ static int snfInitStateGet(void)
     return SNF_WIFI_ADAPTER_OK;
 }
 
+/**
+ * @brief 将SDK安全类型转换为适配模块安全类型.
+ *
+ * @param [in] security - SDK安全类型.
+ * @return 适配模块安全类型.
+ */
 static SnfWifiSecurity snfSecurityFromSdk(wifi_security_t security)
 {
     SnfWifiSecurity adapter_security = SNF_WIFI_SECURITY_UNKNOWN;
@@ -158,6 +204,13 @@ static SnfWifiSecurity snfSecurityFromSdk(wifi_security_t security)
     return adapter_security;
 }
 
+/**
+ * @brief 将适配模块安全类型转换为SDK安全类型.
+ *
+ * @param [in] security - 适配模块安全类型.
+ * @param [out] sdk_security - SDK安全类型.
+ * @return 0表示成功, 负数表示失败.
+ */
 static int snfSecurityToSdk(SnfWifiSecurity security, wifi_security_t *sdk_security)
 {
     if (sdk_security == NULL)
@@ -189,6 +242,12 @@ static int snfSecurityToSdk(SnfWifiSecurity security, wifi_security_t *sdk_secur
     return 0;
 }
 
+/**
+ * @brief 将SDK STA断开事件转换为适配模块断开原因.
+ *
+ * @param [in] event_data - SDK STA断开事件.
+ * @return 适配模块断开原因.
+ */
 static SnfWifiDisconnectReason snfDisconnectReasonFromSdk(const wifi_event_sta_disconnected_t *event_data)
 {
     SnfWifiDisconnectReason reason = SNF_WIFI_DISCONNECT_REASON_UNKNOWN;
@@ -235,10 +294,16 @@ static SnfWifiDisconnectReason snfDisconnectReasonFromSdk(const wifi_event_sta_d
     return reason;
 }
 
-static void snfNotifyEvent(SnfWifiAdapterEvt event, const void *event_data)
+/**
+ * @brief 将适配模块事件转发给已注册的应用回调.
+ *
+ * @param [in] event - 适配模块事件.
+ * @param [in] event_data - 事件数据或NULL.
+ */
+static void eventCallback(SnfWifiAdapterEvt event, const void *event_data)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
-    SnfWifiAdapterEventCB callback = adp_state->event_callback;
+    SnfWifiEventCB callback = adp_state->event_callback;
     void *user_data = adp_state->event_user_data;
 
     if (callback != NULL)
@@ -247,6 +312,15 @@ static void snfNotifyEvent(SnfWifiAdapterEvt event, const void *event_data)
     }
 }
 
+/**
+ * @brief SDK WIFI事件处理入口.
+ *
+ * @param [in] arg - 注册时传入的参数, 未使用.
+ * @param [in] event_module - 事件模块.
+ * @param [in] event_id - 事件ID.
+ * @param [in] event_data - SDK事件数据.
+ * @return SDK错误码.
+ */
 static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
                                    int event_id, void *event_data)
 {
@@ -259,7 +333,7 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
     {
         case EVENT_WIFI_SCAN_DONE:
             adp_state->scan_started = 0;
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_SCAN_DONE, NULL);
+            eventCallback(SNF_WIFI_ADP_EVT_SCAN_DONE, NULL);
             break;
         case EVENT_WIFI_STA_CONNECTED:
         {
@@ -267,11 +341,11 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
 
             if (snfWifiAdapterStaGetLinkInfo(&link_info) == SNF_WIFI_ADAPTER_OK)
             {
-                snfNotifyEvent(SNF_WIFI_ADP_EVT_CONNECTED, &link_info);
+                eventCallback(SNF_WIFI_ADP_EVT_CONNECTED, &link_info);
             }
             else
             {
-                snfNotifyEvent(SNF_WIFI_ADP_EVT_CONNECTED, NULL);
+                eventCallback(SNF_WIFI_ADP_EVT_CONNECTED, NULL);
             }
             break;
         }
@@ -281,14 +355,14 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
 
             disconnect_event.reason = snfDisconnectReasonFromSdk(
                 (const wifi_event_sta_disconnected_t *)event_data);
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_DISCONNECTED, &disconnect_event);
+            eventCallback(SNF_WIFI_ADP_EVT_DISCONNECTED, &disconnect_event);
             break;
         }
         case EVENT_WIFI_AP_START:
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_AP_STARTED, NULL);
+            eventCallback(SNF_WIFI_ADP_EVT_AP_STARTED, NULL);
             break;
         case EVENT_WIFI_AP_STOP:
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_AP_STOPPED, NULL);
+            eventCallback(SNF_WIFI_ADP_EVT_AP_STOPPED, NULL);
             break;
         case EVENT_WIFI_AP_CONNECTED:
         {
@@ -301,7 +375,7 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
                 memcpy(client_event.mac, sdk_event_data->mac, sizeof(client_event.mac));
                 client_event.ip_addr = sdk_event_data->ipaddr;
             }
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_AP_CLIENT_CONNECTED, &client_event);
+            eventCallback(SNF_WIFI_ADP_EVT_AP_CLIENT_CONNECTED, &client_event);
             break;
         }
         case EVENT_WIFI_AP_DISCONNECTED:
@@ -314,7 +388,7 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
             {
                 memcpy(client_event.mac, sdk_event_data->mac, sizeof(client_event.mac));
             }
-            snfNotifyEvent(SNF_WIFI_ADP_EVT_AP_CLIENT_DISCONNECTED, &client_event);
+            eventCallback(SNF_WIFI_ADP_EVT_AP_CLIENT_DISCONNECTED, &client_event);
             break;
         }
         default:
@@ -324,6 +398,11 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
     return BK_OK;
 }
 
+/**
+ * @brief 启动STA接口.
+ *
+ * @return WIFI适配模块状态码.
+ */
 static int snfStartSta(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -346,6 +425,11 @@ static int snfStartSta(void)
     return SNF_WIFI_ADAPTER_OK;
 }
 
+/**
+ * @brief 停止STA接口.
+ *
+ * @return WIFI适配模块状态码.
+ */
 static int snfStopSta(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -368,6 +452,11 @@ static int snfStopSta(void)
     return SNF_WIFI_ADAPTER_OK;
 }
 
+/**
+ * @brief 启动AP接口.
+ *
+ * @return WIFI适配模块状态码.
+ */
 static int snfStartAp(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -384,6 +473,11 @@ static int snfStartAp(void)
     return SNF_WIFI_ADAPTER_OK;
 }
 
+/**
+ * @brief 停止AP接口.
+ *
+ * @return WIFI适配模块状态码.
+ */
 static int snfStopAp(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -405,11 +499,6 @@ static int snfStopAp(void)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 初始化WIFI适配模块及SDK事件桥接
- *
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterInit(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -455,11 +544,6 @@ int snfWifiAdapterInit(void)
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 反初始化WIFI适配模块及SDK事件桥接，当前SDK不支持
- *
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterDeinit(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -504,16 +588,7 @@ int snfWifiAdapterDeinit(void)
     return adapter_error;
 }
 
-/**
- * @brief 设置WIFI工作模式并立即启停对应接口
- *
- * AP 须先调用 snfWifiAdapterApSetConfig；STA 仅启动接口, 不会自动连接.
- * 目标模式与当前一致且接口已就绪时直接返回成功.
- *
- * @param [in] mode - WIFI工作模式.
- * @return WIFI适配模块状态码.
- */
-int snfWifiAdapterSetMode(SnfWifiAdapterMode mode)
+int snfWifiAdapterSetMode(SnfWifiMode mode)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
     int adapter_error;
@@ -597,11 +672,6 @@ int snfWifiAdapterSetMode(SnfWifiAdapterMode mode)
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 获取当前WIFI工作模式
- *
- * @return 当前WIFI工作模式, 未初始化时返回 SNF_WIFI_MODE_NONE.
- */
 int snfWifiAdapterGetMode(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -609,12 +679,6 @@ int snfWifiAdapterGetMode(void)
     return adp_state->mode;
 }
 
-/**
- * @brief 配置STA连接参数
- *
- * @param [in] config - STA配置参数.
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterStaSetConfig(const SnfWifiStaConfig *config)
 {
     wifi_sta_config_t sdk_config = {0};
@@ -647,12 +711,6 @@ int snfWifiAdapterStaSetConfig(const SnfWifiStaConfig *config)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 获取STA连接参数
- *
- * @param [out] config - STA配置参数.
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterStaGetConfig(SnfWifiStaConfig *config)
 {
     wifi_sta_config_t sdk_config = {0};
@@ -683,11 +741,6 @@ int snfWifiAdapterStaGetConfig(SnfWifiStaConfig *config)
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 使用已配置参数连接STA
- *
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterStaConnect(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -710,11 +763,6 @@ int snfWifiAdapterStaConnect(void)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 断开STA与当前AP的连接
- *
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterStaDisconnect(void)
 {
     bk_err_t sdk_error;
@@ -731,12 +779,6 @@ int snfWifiAdapterStaDisconnect(void)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 获取当前STA连接信息
- *
- * @param [out] info - STA连接信息.
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterStaGetLinkInfo(SnfWifiLinkInfo *info)
 {
     wifi_link_status_t sdk_status = {0};
@@ -769,11 +811,6 @@ int snfWifiAdapterStaGetLinkInfo(SnfWifiLinkInfo *info)
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 获取当前STA信号强度
- *
- * @return RSSI值, 单位dBm; 失败时返回负数错误码.
- */
 int snfWifiAdapterStaGetRssi(int *rssi)
 {
     SnfWifiLinkInfo info = {0};
@@ -795,11 +832,6 @@ int snfWifiAdapterStaGetRssi(int *rssi)
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 启动异步WIFI扫描
- *
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterScan(void)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
@@ -824,14 +856,6 @@ int snfWifiAdapterScan(void)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 获取并转换最近一次WIFI扫描结果
- *
- * @param [out] results - 扫描结果数组, max_count 为0时可传入 NULL.
- * @param [in] max_count - results 可容纳的最大结果数.
- * @param [out] result_count - 实际写入 results 的结果数.
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count,
                                  uint16_t *result_count)
 {
@@ -891,12 +915,6 @@ int snfWifiAdapterScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count,
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 配置软件AP
- *
- * @param [in] config - AP配置参数.
- * @return WIFI适配模块状态码.
- */
 int snfWifiAdapterApSetConfig(const SnfWifiApConfig *config)
 {
     netif_ip4_config_t ip_config = {0};
@@ -950,14 +968,7 @@ int snfWifiAdapterApSetConfig(const SnfWifiApConfig *config)
     return snfMapSdkError(sdk_error);
 }
 
-/**
- * @brief 注册应用事件回调
- *
- * @param [in] callback - WIFI适配模块事件回调.
- * @param [in] user_data - 传递给回调函数的用户数据.
- * @return WIFI适配模块状态码.
- */
-int snfWifiAdapterRegisterEventCallback(SnfWifiAdapterEventCB callback, void *user_data)
+int snfWifiAdapterRegisterEventCallback(SnfWifiEventCB callback, void *user_data)
 {
     SnfWifiAdapterState *adp_state = &adapter_state;
 

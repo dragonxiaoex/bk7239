@@ -25,7 +25,19 @@ typedef enum {
 } task_priority_type_t;
 
 #define SONOFF_WIFI_TASK_NAME                       "snf_wifi"
-#define SONOFF_WIFI_TASK_STACKSIZE                  (4*1024)
+#define SONOFF_WIFI_TASK_STACKSIZE                  (1*1024)
 #define SONOFF_WIFI_TASK_PRIO                       TASK_PRIORITY_LOW
+
+#define SONOFF_MAIN_TASK_NAME                       "snf_main"
+#define SONOFF_MAIN_TASK_STACKSIZE                  (1*1024)
+#define SONOFF_MAIN_TASK_PRIO                       TASK_PRIORITY_LOW
+
+#define SONOFF_HTTP_TASK_NAME                       "snf_http"
+#define SONOFF_HTTP_TASK_STACKSIZE                  (1*1024)
+#define SONOFF_HTTP_TASK_PRIO                       TASK_PRIORITY_LOW
+
+#define SONOFF_OTA_TASK_NAME                        "snf_ota"
+#define SONOFF_OTA_TASK_STACKSIZE                   (1*1024)
+#define SONOFF_OTA_TASK_PRIO                        TASK_PRIORITY_LOW
 
 #endif

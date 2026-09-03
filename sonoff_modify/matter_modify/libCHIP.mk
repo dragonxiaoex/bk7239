@@ -152,6 +152,7 @@ INCLUDES += -I$(CONFIG_DIR)
 
 # sonoff modify start
 INCLUDES += $(addprefix -I,$(shell find $(SONOFF_ROOT)/sonoff -type d))
+INCLUDES += -I$(PROJECT_DIR)/components/main/inc
 # sonoff modify end
 
 ifeq ($(EXTERNAL_PLATFORM), y)
@@ -300,4 +301,3 @@ CHIP_CORE:
 .PHONY: clean
 clean:
 	rm -rf $(OUTPUT_DIR)/
-
