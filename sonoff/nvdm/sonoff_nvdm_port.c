@@ -1,6 +1,6 @@
 /**
  * @file    sonoff_nvdm_port.c
- * @brief   NVDM适配模块
+ * @brief   NVDM平台适配
  *
  * @author  yifei wang (yifei.wang@itead.cc)
  * @date    2026-09-04

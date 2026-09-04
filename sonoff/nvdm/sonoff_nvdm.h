@@ -8,29 +8,23 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_NVDM_SONOFF_NVDM_H__
-#define __SONOFF_NVDM_SONOFF_NVDM_H__
+#ifndef __SONOFF_NVDM_H__
+#define __SONOFF_NVDM_H__
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#define NVDM_USER_GROUP                 "user."      /* 用户配置组 */
+#define NVDM_FAC_GROUP                  "factory."   /* 工厂配置组 */
+#define NVDM_MATTER_GROUP               "matter."    /* Matter配置组 */
 
-/** @brief NVDM工厂配置组. */
-#define NVDM_FAC_GROUP                  (0x0001)
-
-/** @brief NVDM普通配置组. */
-#define NVDM_NORMAL_GROUP               (0x0002)
-
-/** @brief 设备MAC地址配置键. */
-#define NVDM_DEV_MAC_KEY                (0x0001)
-
-/** @brief 定义NVDM普通配置项. */
-#define NVDM_NORMAL_ITEM(x, n, y)       {NVDM_NORMAL_GROUP, (x), (n), (y), ((sizeof(y) + 3) / 4)}
+/** @brief 定义NVDM用户配置项. */
+#define NVDM_USER_ITEM(x, y)        {NVDM_USER_GROUP, (x), (y), sizeof(y)}
 
 /** @brief 定义NVDM工厂配置项. */
-#define NVDM_FAC_ITEM(x, n, y)          {NVDM_FAC_GROUP, (x), (n), (y), ((sizeof(y) + 3) / 4)}
+#define NVDM_FAC_ITEM(x, y)         {NVDM_FAC_GROUP, (x),  (y), sizeof(y)}
+
+/** @brief 定义NVDM Matter配置项. */
+#define NVDM_MATTER_ITEM(x, y)      {NVDM_MATTER_GROUP, (x), (y), sizeof(y)}
 
 /**
  * @brief 显示全部NVDM配置项.
@@ -45,21 +39,14 @@ int snfNvdmShow(void);
  * @param [in] key_name - 配置项名称.
  * @param [in] value - 待写入的字符串值.
  */
-void snfNvdmCliWriteItem(const char *key_name, const char *value);
+void snfNvdmCliWriteItem(const char *group, const char *key, const char *value);
 
 /**
  * @brief 通过命令行读取NVDM配置项.
  *
  * @param [in] key_name - 配置项名称.
  */
-void snfNvdmCliReadItem(const char *key_name);
-
-/**
- * @brief 初始化NVDM模块.
- *
- * @return 0表示初始化成功.
- */
-int snfNvdmInit(void);
+void snfNvdmCliReadItem(const char *group, const char *key);
 
 /**
  * @brief 读取NVDM字符串配置项.
@@ -102,8 +89,20 @@ int snfNvdmReadInt(int group_id, int key_num);
  */
 int snfNvdmWriteInt(int group_id, int key_num, int value);
 
-#ifdef __cplusplus
-}
-#endif
+/**
+ * @brief 清理NVDM配置项.
+ *
+ * @param [in] group - 配置组名称.
+ * @param [in] key - 配置键名称.
+ * @return 0表示清理成功, 其他值表示清理失败.
+ */
+int snfNvdmCleanUserGroup(void);
 
-#endif /* __SONOFF_NVDM_SONOFF_NVDM_H__ */
+/**
+ * @brief 初始化NVDM模块.
+ *
+ * @return 0表示初始化成功.
+ */
+int snfNvdmInit(void);
+
+#endif /* __SONOFF_NVDM_H__ */
