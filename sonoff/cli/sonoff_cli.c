@@ -25,6 +25,7 @@
 #include "sonoff_nvdm.h"
 #include "sonoff_wifi.h"
 #include "sonoff_project_config.h"
+#include "sonoff_sha256.h"
 #include "xf_lcd_nv3007.h"
 
 static const char *tag = "SNF-CLI";
@@ -56,6 +57,10 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_MT_SERIAL_NUM             "AT+MT_SERIAL_NUM"
 #define AT_CMD_MT_SERIAL_NUM_QUERY       "AT+MT_SERIAL_NUM?"
 #define AT_CMD_MT_SERIAL_NUM_SET         "AT+MT_SERIAL_NUM_SET"
+#define AT_CMD_MT_FACTORY_DATA_WRITE     "AT+MT_FACTORY_DATA_WRITE"
+#define AT_MT_FACTORY_DATA_FIELD_NUM     10
+#define AT_MT_FACTORY_DATA_WRITE_ARGC    12
+#define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
 
 /**
  * @brief Sonoff工具箱子命令处理函数.
@@ -72,6 +77,11 @@ typedef struct
     SnfCliHandler handler;      /* 子命令处理函数 */
     void (*print_help)(void);   /* 子命令帮助打印函数 */
 } SnfCliEntry;
+
+/**
+ * @brief Matter工厂数据单项写入函数.
+ */
+typedef int (*AtMatterItemSet)(const char *value);
 
 /**
  * @brief 打印WIFI测试命令帮助.
@@ -781,6 +791,217 @@ static void atMtSerialNumSetCommand(char *pcWriteBuffer, int xWriteBufferLen, in
 }
 
 /**
+ * @brief 将十六进制字符转换为半字节.
+ *
+ * @param [in] ch - 十六进制字符.
+ * @param [out] nibble - 半字节值.
+ * @return 1表示转换成功, 0表示字符非法.
+ */
+static int atHexNibble(char ch, uint8_t *nibble)
+{
+    if (nibble == NULL)
+    {
+        return 0;
+    }
+
+    if ((ch >= '0') && (ch <= '9'))
+    {
+        *nibble = (uint8_t)(ch - '0');
+        return 1;
+    }
+
+    if ((ch >= 'A') && (ch <= 'F'))
+    {
+        *nibble = (uint8_t)((ch - 'A') + 10);
+        return 1;
+    }
+
+    if ((ch >= 'a') && (ch <= 'f'))
+    {
+        *nibble = (uint8_t)((ch - 'a') + 10);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 解码64位十六进制SHA256摘要.
+ *
+ * @param [in] hex - 64位十六进制字符串.
+ * @param [out] digest - 32字节摘要缓冲区.
+ * @return 1表示解码成功, 0表示非法.
+ */
+static int atSha256HexDecode(const char *hex, uint8_t *digest)
+{
+    uint16_t i;
+    uint8_t high;
+    uint8_t low;
+
+    if ((hex == NULL) || (digest == NULL))
+    {
+        return 0;
+    }
+
+    if (strlen(hex) != AT_MT_FACTORY_DATA_SHA256_HEX_LEN)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
+    {
+        if (atHexNibble(hex[i * 2], &high) == 0)
+        {
+            return 0;
+        }
+
+        if (atHexNibble(hex[(i * 2) + 1], &low) == 0)
+        {
+            return 0;
+        }
+
+        digest[i] = (uint8_t)((high << 4) | low);
+    }
+
+    return 1;
+}
+
+/**
+ * @brief 校验factory_data含末尾逗号的SHA256摘要.
+ *
+ * @param [in] fields - 10个工厂数据字段.
+ * @param [in] sha256_hex - 64位十六进制摘要.
+ * @return 0表示匹配, 负数表示计算失败或不匹配.
+ */
+static int atFactoryDataSha256Verify(const char * const *fields, const char *sha256_hex)
+{
+    SnfSha256Ctx ctx;
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint8_t expected[SNF_SHA256_DIGEST_SIZE];
+    uint16_t i;
+    int ret;
+
+    if ((fields == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (atSha256HexDecode(sha256_hex, expected) == 0)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        if (fields[i] == NULL)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+
+        ret = snfSha256Update(&ctx, (const uint8_t *)fields[i], (uint32_t)strlen(fields[i]));
+        if (ret != SNF_SHA256_OK)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+
+        ret = snfSha256Update(&ctx, (const uint8_t *)",", 1);
+        if (ret != SNF_SHA256_OK)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+    }
+
+    ret = snfSha256Finish(&ctx, digest, sizeof(digest));
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    if (memcmp(digest, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 处理AT+MT_FACTORY_DATA_WRITE写入命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtFactoryDataWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    static const AtMatterItemSet item_set[AT_MT_FACTORY_DATA_FIELD_NUM] = {
+        snfMatterDiscriminatorSet,
+        snfMatterIterationCountSet,
+        snfMatterSaltSet,
+        snfMatterVerifierSet,
+        snfMatterVendorIdSet,
+        snfMatterVendorNameSet,
+        snfMatterProductIdSet,
+        snfMatterProductNameSet,
+        snfMatterRdIdUidSet,
+        snfMatterPasscodeSet,
+    };
+    const char *fields[AT_MT_FACTORY_DATA_FIELD_NUM];
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != AT_MT_FACTORY_DATA_WRITE_ARGC) || (argv == NULL))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+        return;
+    }
+
+    for (i = 1; i < AT_MT_FACTORY_DATA_WRITE_ARGC; i++)
+    {
+        if (argv[i] == NULL)
+        {
+            atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+            return;
+        }
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        fields[i] = argv[i + 1];
+    }
+
+    if (atFactoryDataSha256Verify(fields, argv[11]) != 0)
+    {
+        LOG_E(tag, "matter factory data sha256 mismatch");
+        atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+        return;
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        if (item_set[i](fields[i]) != 0)
+        {
+            atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+            return;
+        }
+    }
+
+    atPrintValue(AT_CMD_MT_FACTORY_DATA_WRITE, "OK");
+}
+
+/**
  * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
  */
 static const struct cli_command snfAtCliCommands[] = {
@@ -788,6 +1009,7 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_FW_VER_QUERY, "query firmware version", atFwVerCommand},
     {AT_CMD_MT_SERIAL_NUM_QUERY, "query product serial number", atMtSerialNumQueryCommand},
     {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
+    {AT_CMD_MT_FACTORY_DATA_WRITE, "write matter factory data", atMtFactoryDataWriteCommand},
 };
 
 #define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))
