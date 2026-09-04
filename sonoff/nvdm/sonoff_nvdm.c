@@ -1,5 +1,5 @@
 /**
- * @file    sonoff_nvdm_core.c
+ * @file    sonoff_nvdm.c
  * @brief   NVDM核心模块
  *
  * @author  yifei wang (yifei.wang@itead.cc)
@@ -8,16 +8,22 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "sonoff_common.h"
 #include "sonoff_log.h"
 #include "sonoff_nvdm.h"
 #include "sonoff_nvdm_port.h"
-#include "sonoff_common.h"
 
 static const char *tag = "SNF-NVDM";
 
+/**
+ * @brief NVDM配置项.
+ */
 typedef struct
 {
     const char *group;
@@ -25,6 +31,16 @@ typedef struct
     const char *data;
     size_t data_len;
 } SnfNvdmItem;
+
+/**
+ * @brief NVDM配置项表.
+ */
+typedef struct
+{
+    const char *group;
+    const SnfNvdmItem *items;
+    size_t item_num;
+} SnfNvdmItemTable;
 
 static const SnfNvdmItem nvdm_user_item_array[] = {
     NVDM_USER_ITEM("wifi.ssid", "sonoff"),
@@ -39,118 +55,191 @@ static const SnfNvdmItem nvdm_matter_item_array[] = {
     NVDM_MATTER_ITEM("pincode", "123456"),
 };
 
-static const size_t nvdm_user_item_num = sizeof(nvdm_user_item_array) / sizeof(SnfNvdmItem);
-static const size_t nvdm_factory_item_num = sizeof(nvdm_factory_item_array) / sizeof(SnfNvdmItem);
-static const size_t nvdm_matter_item_num = sizeof(nvdm_matter_item_array) / sizeof(SnfNvdmItem);
+static const SnfNvdmItemTable nvdm_item_table_array[] = {
+    {NVDM_USER_GROUP, nvdm_user_item_array, sizeof(nvdm_user_item_array) / sizeof(nvdm_user_item_array[0])},
+    {NVDM_FAC_GROUP, nvdm_factory_item_array, sizeof(nvdm_factory_item_array) / sizeof(nvdm_factory_item_array[0])},
+    {NVDM_MATTER_GROUP, nvdm_matter_item_array, sizeof(nvdm_matter_item_array) / sizeof(nvdm_matter_item_array[0])},
+};
 
-/** @brief 检查并恢复缺失配置项的默认值. */
-static void nvdmCheckDefaultValue(void)
+static const size_t nvdm_item_table_num = sizeof(nvdm_item_table_array) / sizeof(nvdm_item_table_array[0]);
+
+/**
+ * @brief 按组名查找配置项表.
+ *
+ * @param [in] group - 配置组名称.
+ * @return 配置项表指针, 未找到时返回NULL.
+ */
+static const SnfNvdmItemTable *nvdmFindItemTable(const char *group)
 {
-    size_t i = 0;
-    int ret = 0;
-    int value_len = 0;
+    size_t i;
 
-    for (i = 0; i < nvdm_user_item_num; i++)
+    if (group == NULL)
     {
-        ret = snfNvdmPortExistStatus(nvdm_user_item_array[i].group, nvdm_user_item_array[i].key);
-        if (ret != 0)
+        return NULL;
+    }
+
+    for (i = 0; i < nvdm_item_table_num; i++)
+    {
+        const SnfNvdmItemTable *table = &nvdm_item_table_array[i];
+
+        if (strcmp(table->group, group) == 0)
         {
-            LOG_I(tag, "nvdm item %s.%s not exist, reset to default value", 
-                nvdm_user_item_array[i].group, nvdm_user_item_array[i].key);
-            value_len = (int)strlen(nvdm_user_item_array[i].data) + 1;
-            snfNvdmWriteStr(nvdm_user_item_array[i].group,
-                            nvdm_user_item_array[i].key,
-                            (const uint8_t *)nvdm_user_item_array[i].data,
-                            value_len);
+            return table;
         }
     }
 
-    for (i = 0; i < nvdm_factory_item_num; i++)
+    return NULL;
+}
+
+/**
+ * @brief 按键名查找配置项.
+ *
+ * @param [in] table - 配置项表.
+ * @param [in] key - 配置键名称.
+ * @return 配置项指针, 未找到时返回NULL.
+ */
+static const SnfNvdmItem *nvdmFindItem(const SnfNvdmItemTable *table, const char *key)
+{
+    size_t i;
+
+    if ((table == NULL) || (key == NULL))
     {
-        ret = snfNvdmPortExistStatus(nvdm_factory_item_array[i].group, nvdm_factory_item_array[i].key);
+        return NULL;
+    }
+
+    for (i = 0; i < table->item_num; i++)
+    {
+        const SnfNvdmItem *item = &table->items[i];
+
+        if (strcmp(item->key, key) == 0)
+        {
+            return item;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief 将配置项写入默认值.
+ *
+ * @param [in] item - 配置项.
+ * @return 0表示写入成功, 负数表示写入失败.
+ */
+static int nvdmWriteDefaultItem(const SnfNvdmItem *item)
+{
+    if (item == NULL)
+    {
+        return -1;
+    }
+
+    return snfNvdmWriteStr(item->group,
+                           item->key,
+                           (const uint8_t *)item->data,
+                           (int)item->data_len);
+}
+
+/**
+ * @brief 检查并恢复缺失配置项的默认值.
+ *
+ * @param [in] table - 配置项表.
+ * @return 0表示执行成功, 负数表示写入默认值失败.
+ */
+static int nvdmCheckItemTable(const SnfNvdmItemTable *table)
+{
+    size_t i;
+    int ret;
+
+    if (table == NULL)
+    {
+        return -1;
+    }
+
+    for (i = 0; i < table->item_num; i++)
+    {
+        const SnfNvdmItem *item = &table->items[i];
+
+        ret = snfNvdmPortExistStatus(item->group, item->key);
         if (ret != 0)
         {
             LOG_I(tag, "nvdm item %s.%s not exist, reset to default value",
-                nvdm_factory_item_array[i].group, nvdm_factory_item_array[i].key);
-            value_len = (int)strlen(nvdm_factory_item_array[i].data) + 1;
-            snfNvdmWriteStr(nvdm_factory_item_array[i].group,
-                            nvdm_factory_item_array[i].key,
-                            (const uint8_t *)nvdm_factory_item_array[i].data,
-                            value_len);
+                  item->group, item->key);
+            if (nvdmWriteDefaultItem(item) != 0)
+            {
+                LOG_E(tag, "nvdm item %s.%s write default failed",
+                      item->group, item->key);
+                return -1;
+            }
         }
     }
 
-    for (i = 0; i < nvdm_matter_item_num; i++)
+    return 0;
+}
+
+/**
+ * @brief 显示配置项表中的全部配置项.
+ *
+ * @param [in] table - 配置项表.
+ */
+static void nvdmShowItemTable(const SnfNvdmItemTable *table)
+{
+    uint8_t buff[BUFF_SIZE_512];
+    size_t i;
+    int ret;
+
+    if (table == NULL)
     {
-        ret = snfNvdmPortExistStatus(nvdm_matter_item_array[i].group, nvdm_matter_item_array[i].key);
+        return;
+    }
+
+    for (i = 0; i < table->item_num; i++)
+    {
+        const SnfNvdmItem *item = &table->items[i];
+
+        memset(buff, 0, sizeof(buff));
+        ret = snfNvdmReadStr(item->group, item->key, buff, (int)sizeof(buff));
         if (ret != 0)
         {
-            LOG_I(tag, "nvdm item %s.%s not exist, reset to default value", 
-                nvdm_matter_item_array[i].group, nvdm_matter_item_array[i].key);
-            value_len = (int)strlen(nvdm_matter_item_array[i].data) + 1;
-            snfNvdmWriteStr(nvdm_matter_item_array[i].group,
-                            nvdm_matter_item_array[i].key,
-                            (const uint8_t *)nvdm_matter_item_array[i].data,
-                            value_len);
+            LOG_I(tag, "nvdm item %s.%s read error", item->group, item->key);
+        }
+        else
+        {
+            printf("%s.%s: %s\r\n", item->group, item->key, (char *)buff);
         }
     }
 }
 
+/**
+ * @brief 检查并恢复全部缺失配置项的默认值.
+ *
+ * @return 0表示执行成功, 负数表示写入默认值失败.
+ */
+static int nvdmCheckDefaultValue(void)
+{
+    size_t i;
+
+    for (i = 0; i < nvdm_item_table_num; i++)
+    {
+        const SnfNvdmItemTable *table = &nvdm_item_table_array[i];
+
+        if (nvdmCheckItemTable(table) != 0)
+        {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 int snfNvdmShow(void)
 {
-    uint8_t buff[BUFF_SIZE_512];
-    size_t i = 0;
-    int ret = 0;
+    size_t i;
 
-    for (i = 0; i < nvdm_user_item_num; i++)
+    for (i = 0; i < nvdm_item_table_num; i++)
     {
-        memset(buff, 0, sizeof(buff));
-        ret = snfNvdmReadStr(nvdm_user_item_array[i].group,
-                             nvdm_user_item_array[i].key,
-                             buff,
-                             BUFF_SIZE_512);
-        if (ret != 0)
-        {
-            LOG_I(tag, "nvdm item %s read error!", nvdm_user_item_array[i].key);
-        }
-        else
-        {
-            LOG_I(tag, "nvdm item %s: %s", nvdm_user_item_array[i].key, (char *)buff);
-        }
-    }
+        const SnfNvdmItemTable *table = &nvdm_item_table_array[i];
 
-    for (i = 0; i < nvdm_factory_item_num; i++)
-    {
-        memset(buff, 0, sizeof(buff));
-        ret = snfNvdmReadStr(nvdm_factory_item_array[i].group,
-                             nvdm_factory_item_array[i].key,
-                             buff,
-                             BUFF_SIZE_512);
-        if (ret != 0)
-        {
-            LOG_I(tag, "nvdm item %s read error!", nvdm_factory_item_array[i].key);
-        }
-        else
-        {
-            LOG_I(tag, "nvdm item %s: %s", nvdm_factory_item_array[i].key, (char *)buff);
-        }
-    }
-
-    for (i = 0; i < nvdm_matter_item_num; i++)
-    {
-        memset(buff, 0, sizeof(buff));
-        ret = snfNvdmReadStr(nvdm_matter_item_array[i].group,
-                             nvdm_matter_item_array[i].key,
-                             buff,
-                             BUFF_SIZE_512);
-        if (ret != 0)
-        {
-            LOG_I(tag, "nvdm item %s read error!", nvdm_matter_item_array[i].key);
-        }
-        else
-        {
-            LOG_I(tag, "nvdm item %s: %s", nvdm_matter_item_array[i].key, (char *)buff);
-        }
+        nvdmShowItemTable(table);
     }
 
     return 0;
@@ -158,109 +247,105 @@ int snfNvdmShow(void)
 
 void snfNvdmCliWriteItem(const char *group, const char *key, const char *value)
 {
-    size_t i = 0;
-    int value_len = 0;
-    SnfNvdmItem *item_array = NULL;
-    size_t item_num = 0;
+    const SnfNvdmItemTable *table;
+    const SnfNvdmItem *item;
+    int value_len;
+    int ret;
 
-    if(strncmp(NVDM_USER_GROUP, group, strlen(NVDM_USER_GROUP)) == 0)
+    if ((group == NULL) || (key == NULL) || (value == NULL))
     {
-        item_array = nvdm_user_item_array;
-        item_num = nvdm_user_item_num;
+        LOG_I(tag, "nvdm cli write param invalid");
+        return;
     }
-    else if(strncmp(NVDM_FAC_GROUP, group, strlen(NVDM_FAC_GROUP)) == 0)
-    {
-        item_array = nvdm_factory_item_array;
-        item_num = nvdm_factory_item_num;
-    }
-    else if(strncmp(NVDM_MATTER_GROUP, group, strlen(NVDM_MATTER_GROUP)) == 0)
-    {
-        item_array = nvdm_matter_item_array;
-        item_num = nvdm_matter_item_num;
-    }
-    else
+
+    table = nvdmFindItemTable(group);
+    if (table == NULL)
     {
         LOG_I(tag, "nvdm group %s not support", group);
         return;
     }
 
-    for (i = 0; i < item_num; i++)
+    item = nvdmFindItem(table, key);
+    if (item == NULL)
     {
-        if (strncmp(item_array[i].key,
-                    key,
-                    strlen(item_array[i].key)) == 0)
-        {
-            LOG_I(tag, "nvdm item %s write value: %s", item_array[i].key, value);
-            value_len = (int)strlen(value) + 1;
-            snfNvdmWriteStr(item_array[i].group,
-                            item_array[i].key,
-                            (const uint8_t *)value,
-                            value_len);
-        }
+        LOG_I(tag, "nvdm key %s not support", key);
+        return;
+    }
+
+    LOG_I(tag, "nvdm item %s.%s write value: %s", item->group, item->key, value);
+    value_len = (int)strlen(value) + 1;
+    ret = snfNvdmWriteStr(item->group, item->key, (const uint8_t *)value, value_len);
+    if (ret != 0)
+    {
+        LOG_E(tag, "nvdm item %s.%s write failed", item->group, item->key);
     }
 }
 
 void snfNvdmCliReadItem(const char *group, const char *key)
 {
     uint8_t buff[BUFF_SIZE_512];
-    size_t i = 0;
-    SnfNvdmItem *item_array = NULL;
-    size_t item_num = 0;
+    const SnfNvdmItemTable *table;
+    const SnfNvdmItem *item;
+    int ret;
 
-    if(strncmp(NVDM_USER_GROUP, group, strlen(NVDM_USER_GROUP)) == 0)
+    if ((group == NULL) || (key == NULL))
     {
-        item_array = nvdm_user_item_array;
-        item_num = nvdm_user_item_num;
+        LOG_I(tag, "nvdm cli read param invalid");
+        return;
     }
-    else if(strncmp(NVDM_FAC_GROUP, group, strlen(NVDM_FAC_GROUP)) == 0)
-    {
-        item_array = nvdm_factory_item_array;
-        item_num = nvdm_factory_item_num;
-    }
-    else if(strncmp(NVDM_MATTER_GROUP, group, strlen(NVDM_MATTER_GROUP)) == 0)
-    {
-        item_array = nvdm_matter_item_array;
-        item_num = nvdm_matter_item_num;
-    }
-    else
+
+    table = nvdmFindItemTable(group);
+    if (table == NULL)
     {
         LOG_I(tag, "nvdm group %s not support", group);
         return;
     }
 
-    memset(buff, 0, sizeof(buff));
-
-    for (i = 0; i < item_num; i++)
+    item = nvdmFindItem(table, key);
+    if (item == NULL)
     {
-        if (strncmp(item_array[i].key,
-                    key,
-                    strlen(item_array[i].key)) == 0)
-        {
-            snfNvdmReadStr(item_array[i].group,
-                           item_array[i].key,
-                           buff,
-                           BUFF_SIZE_512);
-            LOG_I(tag, "nvdm item %s value: %s", item_array[i].key, (char *)buff);
-        }
+        LOG_I(tag, "nvdm key %s not support", key);
+        return;
     }
+
+    memset(buff, 0, sizeof(buff));
+    ret = snfNvdmReadStr(item->group, item->key, buff, (int)sizeof(buff));
+    if (ret != 0)
+    {
+        LOG_I(tag, "nvdm item %s.%s read error", item->group, item->key);
+        return;
+    }
+
+    LOG_I(tag, "nvdm item %s.%s value: %s", item->group, item->key, (char *)buff);
 }
 
-int snfNvdmReadStr(int group_id, int key_num, uint8_t *buff, int len)
+int snfNvdmReadStr(const char *group, const char *key, uint8_t *buff, int len)
 {
-    return snfNvdmPortReadStr(group_id, key_num, buff, len);
+    if ((group == NULL) || (key == NULL) || (buff == NULL) || (len <= 0))
+    {
+        return -1;
+    }
+
+    return snfNvdmPortReadStr(group, key, buff, len);
 }
 
-int snfNvdmWriteStr(int group_id, int key_num, const uint8_t *value, int len)
+int snfNvdmWriteStr(const char *group, const char *key, const uint8_t *value, int len)
 {
-    return snfNvdmPortWriteStr(group_id, key_num, value, len);
+    if ((group == NULL) || (key == NULL) || (value == NULL) || (len <= 0))
+    {
+        return -1;
+    }
+
+    return snfNvdmPortWriteStr(group, key, value, len);
 }
 
-int snfNvdmReadInt(int group_id, int key_num)
+int snfNvdmReadInt(const char *group, const char *key)
 {
     uint8_t buff[BUFF_SIZE_32];
-    int ret = 0;
+    int ret;
 
-    ret = snfNvdmPortReadStr(group_id, key_num, buff, BUFF_SIZE_32);
+    memset(buff, 0, sizeof(buff));
+    ret = snfNvdmReadStr(group, key, buff, (int)sizeof(buff));
     if (ret != 0)
     {
         return ret;
@@ -269,40 +354,46 @@ int snfNvdmReadInt(int group_id, int key_num)
     return atoi((const char *)buff);
 }
 
-int snfNvdmWriteInt(int group_id, int key_num, int value)
+int snfNvdmWriteInt(const char *group, const char *key, int value)
 {
     uint8_t buff[BUFF_SIZE_32];
-    int len = 0;
+    int len;
 
-    snprintf((char *)buff, sizeof(buff) - 1, "%d", value);
+    memset(buff, 0, sizeof(buff));
+    snprintf((char *)buff, sizeof(buff), "%d", value);
     len = (int)strlen((const char *)buff) + 1;
 
-    return snfNvdmPortWriteStr(group_id, key_num, buff, len);
+    return snfNvdmWriteStr(group, key, buff, len);
 }
 
 int snfNvdmCleanUserGroup(void)
 {
-    int ret = 0;
-    size_t i = 0;
-    int value_len = 0;
+    const SnfNvdmItemTable *table;
+    size_t i;
 
-    if(snfNvdmPortDeleteGroup(NVDM_USER_GROUP) == 0)
+    table = nvdmFindItemTable(NVDM_USER_GROUP);
+    if (table == NULL)
     {
-        for (i = 0; i < nvdm_user_item_num; i++)
-        {
-            LOG_I(tag, "nvdm item %s.%s clean, reset to default value", 
-                nvdm_user_item_array[i].group, nvdm_user_item_array[i].key);
-            value_len = (int)strlen(nvdm_user_item_array[i].data) + 1;
-            snfNvdmWriteStr(nvdm_user_item_array[i].group,
-                            nvdm_user_item_array[i].key,
-                            (const uint8_t *)nvdm_user_item_array[i].data,
-                            value_len);
-        }
-    }
-    else
-    {
-        LOG_I(tag, "nvdm user group clean error");
+        LOG_E(tag, "nvdm user group not found");
         return -1;
+    }
+
+    for (i = 0; i < table->item_num; i++)
+    {
+        const SnfNvdmItem *item = &table->items[i];
+
+        if (snfNvdmPortDelete(item->group, item->key) != 0)
+        {
+            LOG_E(tag, "nvdm item %s.%s delete failed", item->group, item->key);
+            return -1;
+        }
+
+        LOG_I(tag, "nvdm item %s.%s clean, reset to default value", item->group, item->key);
+        if (nvdmWriteDefaultItem(item) != 0)
+        {
+            LOG_E(tag, "nvdm item %s.%s write default failed", item->group, item->key);
+            return -1;
+        }
     }
 
     return 0;
@@ -310,8 +401,11 @@ int snfNvdmCleanUserGroup(void)
 
 int snfNvdmInit(void)
 {
-    snfNvdmPortInit();
-    nvdmCheckDefaultValue();
+    if (nvdmCheckDefaultValue() != 0)
+    {
+        LOG_E(tag, "nvdm check default value failed");
+        return -1;
+    }
 
     return 0;
 }

@@ -20,6 +20,7 @@
 #include "sonoff_cli.h"
 #include "sonoff_log.h"
 #include "sonoff_net_test.h"
+#include "sonoff_nvdm.h"
 #include "sonoff_wifi.h"
 #include "xf_lcd_nv3007.h"
 
@@ -446,10 +447,70 @@ static void taskCliCommand(int argc, char **argv)
     vPortFree(task_list_buf);
 }
 
+/**
+ * @brief 打印NVDM测试命令帮助.
+ */
+static void snfNvdmCliPrintHelp(void)
+{
+    printf("sonoff nvdm show\r\n");
+    printf("sonoff nvdm read <group> <key>\r\n");
+    printf("sonoff nvdm write <group> <key> <value>\r\n");
+    printf("sonoff nvdm clean\r\n");
+}
+
+/**
+ * @brief 处理NVDM测试串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为nvdm.
+ * @param [in] argv - 参数列表.
+ */
+static void snfNvdmCliCommand(int argc, char **argv)
+{
+    int ret = -1;
+    uint8_t show_help = 0;
+
+    if (argc < 2)
+    {
+        show_help = 1;
+    }
+    else if ((strcmp(argv[1], "show") == 0) && (argc == 2))
+    {
+        ret = snfNvdmShow();
+    }
+    else if ((strcmp(argv[1], "read") == 0) && (argc == 4))
+    {
+        snfNvdmCliReadItem(argv[2], argv[3]);
+        ret = 0;
+    }
+    else if ((strcmp(argv[1], "write") == 0) && (argc == 5))
+    {
+        snfNvdmCliWriteItem(argv[2], argv[3], argv[4]);
+        ret = 0;
+    }
+    else if ((strcmp(argv[1], "clean") == 0) && (argc == 2))
+    {
+        ret = snfNvdmCleanUserGroup();
+    }
+    else
+    {
+        show_help = 1;
+    }
+
+    if (show_help != 0)
+    {
+        snfNvdmCliPrintHelp();
+    }
+    else
+    {
+        printf("sonoff nvdm ret=%d\r\n", ret);
+    }
+}
+
 static const SnfCliEntry snf_cli_command_table[] = {
     {"wifi", "WIFI test commands", &snfWifiCliCommand, &snfWifiCliPrintHelp},
     {"net", "network test commands", &snfNetCliCommand, &snfNetCliPrintHelp},
     {"lcd", "LCD test commands", &snfLcdCliCommand, &snfLcdCliPrintHelp},
+    {"nvdm", "NVDM test commands", &snfNvdmCliCommand, &snfNvdmCliPrintHelp},
     {"mem", "show heap memory", &memCliCommand, &memCliPrintHelp},
     {"task", "show task list", &taskCliCommand, &taskCliPrintHelp},
 };

@@ -19,6 +19,7 @@
 #include "sonoff_log.h"
 #include "sonoff_main.h"
 #include "sonoff_net.h"
+#include "sonoff_nvdm.h"
 #include "sonoff_task_def.h"
 #include "sonoff_net_test.h"
 
@@ -122,11 +123,18 @@ int snfMainInit(void)
     SnfMainState *main_state = &main_state_data;
     int ret;
 
+    ret = snfNvdmInit();
+    if (ret != 0)
+    {
+        LOG_E(tag, "nvdm init failed, ret=%d", ret);
+        return -1;
+    }
+
     ret = snfCliInit();
     if (ret != 0)
     {
         LOG_E(tag, "cli init failed, ret=%d", ret);
-        return -1;
+        return -2;
     }
 
     if (main_state->event_queue == NULL)
@@ -136,7 +144,7 @@ int snfMainInit(void)
         if (main_state->event_queue == NULL)
         {
             LOG_E(tag, "event queue init failed");
-            return -2;
+            return -3;
         }
     }
 
@@ -150,7 +158,7 @@ int snfMainInit(void)
                         &main_state->task_handle) != pdPASS)
         {
             LOG_E(tag, "main task init failed");
-            return -3;
+            return -4;
         }
     }
 
@@ -158,14 +166,14 @@ int snfMainInit(void)
     if (ret != 0)
     {
         LOG_E(tag, "network event callback register failed, ret=%d", ret);
-        return -4;
+        return -5;
     }
 
     ret = snfNetInit();
     if (ret != 0)
     {
         LOG_E(tag, "network manager init failed, ret=%d", ret);
-        return -5;
+        return -6;
     }
 
     /* only for net test */

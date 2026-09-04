@@ -12,7 +12,7 @@ extern void bk_set_jtag_mode(uint32_t cpu_id, uint32_t group_id);
 void user_app_main(void)
 {
     /* sonoff modify start */
-    rtos_delay_milliseconds(500);
+    rtos_delay_milliseconds(2000);
     extern void sonoffEntry(void);
     sonoffEntry();
     bk_openthread_init();
