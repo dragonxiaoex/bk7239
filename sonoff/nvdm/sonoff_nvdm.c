@@ -48,11 +48,20 @@ static const SnfNvdmItem nvdm_user_item_array[] = {
 };
 
 static const SnfNvdmItem nvdm_factory_item_array[] = {
-    NVDM_FAC_ITEM("wifi.mac", "11:22:33:44:55:66"),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_SERIAL_NUMBER, ""),
 };
 
 static const SnfNvdmItem nvdm_matter_item_array[] = {
-    NVDM_MATTER_ITEM("pincode", "123456"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_DISCRIMINATOR, "0"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_ITERATION_COUNT, "0"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_SALT, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_VERIFIER, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_VENDOR_ID, "4742"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_VENDOR_NAME, "Sonoff"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PRODUCT_ID, "0"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PRODUCT_NAME, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_RD_ID_UID, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PASSCODE, "0"),
 };
 
 static const SnfNvdmItemTable nvdm_item_table_array[] = {

@@ -14,14 +14,17 @@
 
 #include <FreeRTOS.h>
 #include <task.h>
+#include <components/system.h>
 
 #include "cli.h"
 
 #include "sonoff_cli.h"
+#include "sonoff_common.h"
 #include "sonoff_log.h"
 #include "sonoff_net_test.h"
 #include "sonoff_nvdm.h"
 #include "sonoff_wifi.h"
+#include "sonoff_project_config.h"
 #include "xf_lcd_nv3007.h"
 
 static const char *tag = "SNF-CLI";
@@ -44,6 +47,15 @@ static const char *tag = "SNF-CLI";
 #define SNF_LCD_COLOR_GREEN              0x07e0U
 #define SNF_LCD_COLOR_RED                0xf800U
 #define SNF_LCD_COLOR_WHITE              0xffffU
+
+#define AT_MASTER_CHIP_NAME              "BK723x"
+#define AT_CMD_MASTER_CHIP_ID            "AT+MASTER_CHIP_ID"
+#define AT_CMD_MASTER_CHIP_ID_QUERY      "AT+MASTER_CHIP_ID?"
+#define AT_CMD_FW_VER                    "AT+FW_VER"
+#define AT_CMD_FW_VER_QUERY              "AT+FW_VER?"
+#define AT_CMD_MT_SERIAL_NUM             "AT+MT_SERIAL_NUM"
+#define AT_CMD_MT_SERIAL_NUM_QUERY       "AT+MT_SERIAL_NUM?"
+#define AT_CMD_MT_SERIAL_NUM_SET         "AT+MT_SERIAL_NUM_SET"
 
 /**
  * @brief Sonoff工具箱子命令处理函数.
@@ -579,10 +591,236 @@ static void snfCliCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, ch
 }
 
 /**
+ * @brief 打印AT命令错误响应.
+ *
+ * @param [in] cmd - AT命令名, 不含问号.
+ */
+static void atPrintError(const char *cmd)
+{
+    printf("%s=ERROR\r\n", cmd);
+}
+
+/**
+ * @brief 打印AT命令成功响应.
+ *
+ * @param [in] cmd - AT命令名, 不含问号.
+ * @param [in] value - 响应值.
+ */
+static void atPrintValue(const char *cmd, const char *value)
+{
+    printf("%s=%s\r\n", cmd, value);
+}
+
+/**
+ * @brief 读取主芯片唯一标识.
+ *
+ * @param [out] uid - 唯一标识缓冲区.
+ * @param [in] uid_size - 缓冲区长度.
+ * @param [out] uid_len - 实际有效字节数.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
+{
+    if ((uid == NULL) || (uid_len == NULL) || (uid_size < BK_MAC_ADDR_LEN))
+    {
+        return -1;
+    }
+
+    memset(uid, 0, uid_size);
+    if (bk_get_mac(uid, MAC_TYPE_BASE) != BK_OK)
+    {
+        return -1;
+    }
+
+    if (BK_IS_ZERO_MAC(uid))
+    {
+        return -1;
+    }
+
+    *uid_len = BK_MAC_ADDR_LEN;
+
+    return 0;
+}
+
+/**
+ * @brief 处理AT+MASTER_CHIP_ID?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMasterChipIdCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    uint8_t uid[BUFF_SIZE_32];
+    char hex[BUFF_SIZE_32 * 2 + 1];
+    char value[BUFF_SIZE_128];
+    uint16_t uid_len;
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MASTER_CHIP_ID);
+        return;
+    }
+
+    if (atGetMasterChipId(uid, sizeof(uid), &uid_len) != 0)
+    {
+        LOG_E(tag, "get master chip id failed");
+        atPrintError(AT_CMD_MASTER_CHIP_ID);
+        return;
+    }
+
+    for (i = 0; i < uid_len; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02X", (unsigned int)uid[i]);
+    }
+
+    snprintf(value, sizeof(value), "%s-%s", AT_MASTER_CHIP_NAME, hex);
+    atPrintValue(AT_CMD_MASTER_CHIP_ID, value);
+}
+
+/**
+ * @brief 处理AT+FW_VER?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atFwVerCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char value[BUFF_SIZE_128];
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_FW_VER);
+        return;
+    }
+
+    ret = snprintf(value,
+                   sizeof(value),
+                   "FW%s-%s-%s-%s-v%s",
+                   SONOFF_DEVICE_CLASS,
+                   SONOFF_DEVICE_SERIAL_NUMBER,
+                   SONOFF_DEVICE_FUNCTION,
+                   SONOFF_DEVICE_CHIP,
+                   SONOFF_SOFTWARE_VERSION_STRING);
+    if ((ret < 0) || (ret >= (int)sizeof(value)))
+    {
+        atPrintError(AT_CMD_FW_VER);
+        return;
+    }
+
+    atPrintValue(AT_CMD_FW_VER, value);
+}
+
+/**
+ * @brief 处理AT+MT_SERIAL_NUM?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSerialNumQueryCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char serial_number[NVDM_FACTORY_SERIAL_NUMBER_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM);
+        return;
+    }
+
+    if (snfSerialNumberGet(serial_number, sizeof(serial_number)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SERIAL_NUM, serial_number);
+}
+
+/**
+ * @brief 处理AT+MT_SERIAL_NUM_SET设置命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSerialNumSetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 2) || (argv == NULL) || (argv[1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM_SET);
+        return;
+    }
+
+    if (snfSerialNumberSet(argv[1]) != 0)
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM_SET);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SERIAL_NUM_SET, "OK");
+}
+
+/**
+ * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
+ */
+static const struct cli_command snfAtCliCommands[] = {
+    {AT_CMD_MASTER_CHIP_ID_QUERY, "query master chip unique id", atMasterChipIdCommand},
+    {AT_CMD_FW_VER_QUERY, "query firmware version", atFwVerCommand},
+    {AT_CMD_MT_SERIAL_NUM_QUERY, "query product serial number", atMtSerialNumQueryCommand},
+    {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
+};
+
+#define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))
+
+/**
+ * @brief 处理AT帮助命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atHelpCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+    (void)argc;
+    (void)argv;
+
+    for (i = 0; i < SNF_AT_COMMAND_COUNT; i++)
+    {
+        printf("%s\r\n", snfAtCliCommands[i].name);
+    }
+}
+
+/**
  * @brief Sonoff工具箱串口命令表.
  */
 static const struct cli_command snfCliCommands[] = {
     {"sonoff", "sonoff <command> [args]", snfCliCommand},
+    {"AT", "AT command", atHelpCommand},
 };
 
 int snfCliInit(void)
@@ -591,6 +829,12 @@ int snfCliInit(void)
 
     ret = cli_register_commands(snfCliCommands,
                                 sizeof(snfCliCommands) / sizeof(snfCliCommands[0]));
+    if (ret != 0)
+    {
+        return ret;
+    }
+
+    ret = cli_register_commands(snfAtCliCommands, (int)SNF_AT_COMMAND_COUNT);
 
     return ret;
 }

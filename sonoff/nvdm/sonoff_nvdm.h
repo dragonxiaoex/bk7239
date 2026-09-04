@@ -10,12 +10,13 @@
  */
 #ifndef __SONOFF_NVDM_H__
 #define __SONOFF_NVDM_H__
-
-#include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
+
+#include "sonoff_nvdm_config.h"
 
 /** @brief NVDM配置组名称. */
 #define NVDM_USER_GROUP                 "user"      /* 用户配置组 */
