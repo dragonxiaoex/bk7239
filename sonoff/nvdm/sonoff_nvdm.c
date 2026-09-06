@@ -18,6 +18,7 @@
 #include "sonoff_log.h"
 #include "sonoff_nvdm.h"
 #include "sonoff_nvdm_port.h"
+#include "sonoff_private_item.h"
 
 static const char *tag = "SNF-NVDM";
 
@@ -45,6 +46,7 @@ typedef struct
 static const SnfNvdmItem nvdm_user_item_array[] = {
     NVDM_USER_ITEM("wifi.ssid", "sonoff"),
     NVDM_USER_ITEM("wifi.password", "12345678"),
+    SNF_PRIVATE_NVDM_USER_ITEM
 };
 
 static const SnfNvdmItem nvdm_factory_item_array[] = {
