@@ -1,3 +1,6 @@
 [submodule "bk_openthread"]
 	path = bk_openthread
 	url = https://gitlab.bekencorp.com/armino/bk_openthread.git
+[submodule "thirty_part/lvgl"]
+	path = thirty_part/lvgl
+	url = https://github.com/lvgl/lvgl.git
