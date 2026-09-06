@@ -11,6 +11,10 @@
 #ifndef __SONOFF_NVDM_CONFIG_H__
 #define __SONOFF_NVDM_CONFIG_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 /** @brief Matter配置项键名. */
@@ -75,11 +79,10 @@ int snfSerialNumberSet(const char *serial_number);
 /**
  * @brief 读取Matter鉴别器.
  *
- * @param [out] discriminator - 鉴别器缓冲区.
- * @param [in] discriminator_size - 缓冲区长度, 需大于NVDM_MATTER_DISCRIMINATOR_STR_MAX_LEN.
+ * @param [out] discriminator - 鉴别器, 取值0到4095.
  * @return 0表示读取成功, 负数表示未设置或读取失败.
  */
-int snfMatterDiscriminatorGet(char *discriminator, uint16_t discriminator_size);
+int snfMatterDiscriminatorGet(uint16_t *discriminator);
 
 /**
  * @brief 写入Matter鉴别器.
@@ -92,11 +95,10 @@ int snfMatterDiscriminatorSet(const char *discriminator);
 /**
  * @brief 读取Matter迭代计数.
  *
- * @param [out] iteration_count - 迭代计数缓冲区.
- * @param [in] iteration_count_size - 缓冲区长度, 需大于NVDM_MATTER_DEC_U32_STR_MAX_LEN.
+ * @param [out] iteration_count - 迭代计数.
  * @return 0表示读取成功, 负数表示未设置或读取失败.
  */
-int snfMatterIterationCountGet(char *iteration_count, uint16_t iteration_count_size);
+int snfMatterIterationCountGet(uint32_t *iteration_count);
 
 /**
  * @brief 写入Matter迭代计数.
@@ -143,11 +145,10 @@ int snfMatterVerifierSet(const char *verifier);
 /**
  * @brief 读取Matter厂商ID.
  *
- * @param [out] vendor_id - 厂商ID缓冲区.
- * @param [in] vendor_id_size - 缓冲区长度, 需大于NVDM_MATTER_HEX_ID_MAX_LEN.
+ * @param [out] vendor_id - 厂商ID, 由十六进制字符串解析.
  * @return 0表示读取成功, 负数表示未设置或读取失败.
  */
-int snfMatterVendorIdGet(char *vendor_id, uint16_t vendor_id_size);
+int snfMatterVendorIdGet(uint16_t *vendor_id);
 
 /**
  * @brief 写入Matter厂商ID.
@@ -177,11 +178,10 @@ int snfMatterVendorNameSet(const char *vendor_name);
 /**
  * @brief 读取Matter产品ID.
  *
- * @param [out] product_id - 产品ID缓冲区.
- * @param [in] product_id_size - 缓冲区长度, 需大于NVDM_MATTER_HEX_ID_MAX_LEN.
+ * @param [out] product_id - 产品ID, 由十六进制字符串解析.
  * @return 0表示读取成功, 负数表示未设置或读取失败.
  */
-int snfMatterProductIdGet(char *product_id, uint16_t product_id_size);
+int snfMatterProductIdGet(uint16_t *product_id);
 
 /**
  * @brief 写入Matter产品ID.
@@ -228,11 +228,10 @@ int snfMatterRdIdUidSet(const char *rd_id_uid);
 /**
  * @brief 读取Matter配对码.
  *
- * @param [out] passcode - 配对码缓冲区.
- * @param [in] passcode_size - 缓冲区长度, 需大于NVDM_MATTER_DEC_U32_STR_MAX_LEN.
+ * @param [out] passcode - 配对码.
  * @return 0表示读取成功, 负数表示未设置或读取失败.
  */
-int snfMatterPasscodeGet(char *passcode, uint16_t passcode_size);
+int snfMatterPasscodeGet(uint32_t *passcode);
 
 /**
  * @brief 写入Matter配对码.
@@ -242,4 +241,7 @@ int snfMatterPasscodeGet(char *passcode, uint16_t passcode_size);
  */
 int snfMatterPasscodeSet(const char *passcode);
 
+#ifdef __cplusplus
+}
+#endif
 #endif  /* __SONOFF_NVDM_CONFIG_H__ */

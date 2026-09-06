@@ -32,6 +32,11 @@
 #include <platform/Beken/FactoryDataProvider.h>
 #include <matter_pal.h>
 
+/* sonoff modify start */
+#include "sonoff_nvdm_config.h"
+#include "sonoff_project_config.h"
+/* sonoff modify end */
+
 using namespace ::chip::DeviceLayer::Internal;
 
 namespace chip {
@@ -96,6 +101,8 @@ CHIP_ERROR FactoryDataProvider::ReadCertDataHeader()
     }
     return CHIP_NO_ERROR;
 }
+/* sonoff modify start */
+#if 0
 CHIP_ERROR FactoryDataProvider::ReadFlashDataHeader()
 {
     if(mFlashDataHeader.magic_code != 0)
@@ -128,8 +135,13 @@ CHIP_ERROR FactoryDataProvider::ReadFlashDataHeader()
     }
     return CHIP_NO_ERROR;
 }
+#endif
+/* sonoff modify end */
+
 CHIP_ERROR FactoryDataProvider::GetCertificationDeclaration(MutableByteSpan & outBuffer)
 {
+    /* sonoff modify start */
+    #if 0
     ReturnErrorOnFailure(ReadCertDataHeader());
     VerifyOrReturnError(outBuffer.size() >= mCertDataHeader.CertificationDeclaration.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -140,6 +152,8 @@ CHIP_ERROR FactoryDataProvider::GetCertificationDeclaration(MutableByteSpan & ou
                 mCertDataHeader.CertificationDeclaration.length),
             CHIP_ERROR_READ_FAILED);
     outBuffer.reduce_size(mCertDataHeader.CertificationDeclaration.length);
+    #endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
@@ -264,6 +278,9 @@ CHIP_ERROR FactoryDataProvider::SignWithDeviceAttestationKey(const ByteSpan & me
 
 CHIP_ERROR FactoryDataProvider::GetSetupDiscriminator(uint16_t & setupDiscriminator)
 {
+    /* sonoff modify start */
+    VerifyOrReturnError(0 == snfMatterDiscriminatorGet(&setupDiscriminator), CHIP_ERROR_READ_FAILED);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(setupDiscriminator) == mFlashDataHeader.SetupDiscriminator.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -274,6 +291,8 @@ CHIP_ERROR FactoryDataProvider::GetSetupDiscriminator(uint16_t & setupDiscrimina
                 mFlashDataHeader.SetupDiscriminator.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
@@ -285,6 +304,9 @@ CHIP_ERROR FactoryDataProvider::SetSetupDiscriminator(uint16_t setupDiscriminato
 
 CHIP_ERROR FactoryDataProvider::GetSpake2pIterationCount(uint32_t & iterationCount)
 {
+    /* sonoff modify start */
+    VerifyOrReturnError(0 == snfMatterIterationCountGet(&iterationCount), CHIP_ERROR_READ_FAILED);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(iterationCount) == mFlashDataHeader.Spake2pIterationCount.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -295,11 +317,26 @@ CHIP_ERROR FactoryDataProvider::GetSpake2pIterationCount(uint32_t & iterationCou
                 mFlashDataHeader.Spake2pIterationCount.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetSpake2pSalt(MutableByteSpan & saltBuf)
 {
+    /* sonoff modify start */
+    char saltB64[NVDM_MATTER_SALT_STR_MAX_LEN + 1] = { 0 };
+    size_t saltB64Len                              = 0;
+    size_t saltLen                                 = 0;
+
+    VerifyOrReturnError(0 == snfMatterSaltGet(saltB64, sizeof(saltB64)), CHIP_ERROR_READ_FAILED);
+    saltB64Len = strlen(saltB64);
+    saltLen    = chip::Base64Decode32(saltB64, saltB64Len, reinterpret_cast<uint8_t *>(saltB64));
+    VerifyOrReturnError(saltLen != 0, CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(saltLen <= saltBuf.size(), CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(saltBuf.data(), saltB64, saltLen);
+    saltBuf.reduce_size(saltLen);
+#if 0
     static constexpr size_t kSpake2pSalt_MaxBase64Len = BASE64_ENCODED_LEN(chip::Crypto::kSpake2p_Max_PBKDF_Salt_Length) + 1;
 
     char saltB64[kSpake2pSalt_MaxBase64Len] = { 0 };
@@ -320,11 +357,25 @@ CHIP_ERROR FactoryDataProvider::GetSpake2pSalt(MutableByteSpan & saltBuf)
     VerifyOrReturnError(saltLen <= saltBuf.size(), CHIP_ERROR_BUFFER_TOO_SMALL);
     memcpy(saltBuf.data(), saltB64, saltLen);
     saltBuf.reduce_size(saltLen);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetSpake2pVerifier(MutableByteSpan & verifierBuf, size_t & verifierLen)
 {
+    /* sonoff modify start */
+    char verifierB64[NVDM_MATTER_VERIFIER_STR_MAX_LEN + 1] = { 0 };
+    size_t verifierB64Len                                  = 0;
+
+    VerifyOrReturnError(0 == snfMatterVerifierGet(verifierB64, sizeof(verifierB64)), CHIP_ERROR_READ_FAILED);
+    verifierB64Len = strlen(verifierB64);
+    verifierLen    = chip::Base64Decode32(verifierB64, verifierB64Len, reinterpret_cast<uint8_t *>(verifierB64));
+    VerifyOrReturnError(verifierLen != 0, CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(verifierLen <= verifierBuf.size(), CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(verifierBuf.data(), verifierB64, verifierLen);
+    verifierBuf.reduce_size(verifierLen);
+#if 0
     static constexpr size_t kSpake2pSerializedVerifier_MaxBase64Len =
         BASE64_ENCODED_LEN(chip::Crypto::kSpake2p_VerifierSerialized_Length) + 1;
 
@@ -346,11 +397,16 @@ CHIP_ERROR FactoryDataProvider::GetSpake2pVerifier(MutableByteSpan & verifierBuf
     VerifyOrReturnError(verifierLen <= verifierBuf.size(), CHIP_ERROR_BUFFER_TOO_SMALL);
     memcpy(verifierBuf.data(), verifierB64, verifierLen);
     verifierBuf.reduce_size(verifierLen);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetSetupPasscode(uint32_t & setupPasscode)
 {
+    /* sonoff modify start */
+    VerifyOrReturnError(0 == snfMatterPasscodeGet(&setupPasscode), CHIP_ERROR_READ_FAILED);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(setupPasscode) == mFlashDataHeader.SetupPasscode.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -361,6 +417,8 @@ CHIP_ERROR FactoryDataProvider::GetSetupPasscode(uint32_t & setupPasscode)
                 mFlashDataHeader.SetupPasscode.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
@@ -371,6 +429,15 @@ CHIP_ERROR FactoryDataProvider::SetSetupPasscode(uint32_t setupPasscode)
 
 CHIP_ERROR FactoryDataProvider::GetVendorName(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    char vendorName[NVDM_MATTER_NAME_MAX_LEN + 1] = { 0 };
+    size_t vendorNameLen                          = 0;
+
+    VerifyOrReturnError(0 == snfMatterVendorNameGet(vendorName, sizeof(vendorName)), CHIP_ERROR_READ_FAILED);
+    vendorNameLen = strlen(vendorName);
+    VerifyOrReturnError(bufSize > vendorNameLen, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(buf, vendorName, vendorNameLen + 1);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.VendorName.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -381,11 +448,16 @@ CHIP_ERROR FactoryDataProvider::GetVendorName(char * buf, size_t bufSize)
                 mFlashDataHeader.VendorName.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetVendorId(uint16_t & vendorId)
 {
+    /* sonoff modify start */
+    VerifyOrReturnError(0 == snfMatterVendorIdGet(&vendorId), CHIP_ERROR_READ_FAILED);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(vendorId) == mFlashDataHeader.VendorId.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -396,11 +468,22 @@ CHIP_ERROR FactoryDataProvider::GetVendorId(uint16_t & vendorId)
                 mFlashDataHeader.VendorId.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetProductName(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    char productName[NVDM_MATTER_NAME_MAX_LEN + 1] = { 0 };
+    size_t productNameLen                          = 0;
+
+    VerifyOrReturnError(0 == snfMatterProductNameGet(productName, sizeof(productName)), CHIP_ERROR_READ_FAILED);
+    productNameLen = strlen(productName);
+    VerifyOrReturnError(bufSize > productNameLen, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(buf, productName, productNameLen + 1);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.ProductName.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -411,11 +494,16 @@ CHIP_ERROR FactoryDataProvider::GetProductName(char * buf, size_t bufSize)
                 mFlashDataHeader.ProductName.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetProductId(uint16_t & productId)
 {
+    /* sonoff modify start */
+    VerifyOrReturnError(0 == snfMatterProductIdGet(&productId), CHIP_ERROR_READ_FAILED);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(productId) == mFlashDataHeader.ProductId.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -426,11 +514,22 @@ CHIP_ERROR FactoryDataProvider::GetProductId(uint16_t & productId)
                 mFlashDataHeader.ProductId.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetSerialNumber(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    char serialNumber[NVDM_FACTORY_SERIAL_NUMBER_LEN + 1] = { 0 };
+    size_t serialNumberLen                                = 0;
+
+    VerifyOrReturnError(0 == snfSerialNumberGet(serialNumber, sizeof(serialNumber)), CHIP_ERROR_READ_FAILED);
+    serialNumberLen = strlen(serialNumber);
+    VerifyOrReturnError(bufSize > serialNumberLen, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(buf, serialNumber, serialNumberLen + 1);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.SerialNumber.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -441,11 +540,16 @@ CHIP_ERROR FactoryDataProvider::GetSerialNumber(char * buf, size_t bufSize)
                 mFlashDataHeader.SerialNumber.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetManufacturingDate(uint16_t & year, uint8_t & month, uint8_t & day)
 {
+    /* sonoff modify start */
+    return CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE;
+#if 0
     uint32_t date;
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(date) >= mFlashDataHeader.ManufacturingDate.length, CHIP_ERROR_BUFFER_TOO_SMALL);
@@ -461,10 +565,15 @@ CHIP_ERROR FactoryDataProvider::GetManufacturingDate(uint16_t & year, uint8_t & 
     month = (date >> 8) & 0xFF;
     day = date & 0xFF;
     return CHIP_NO_ERROR;
+#endif
+    /* sonoff modify end */
 }
 
 CHIP_ERROR FactoryDataProvider::GetHardwareVersion(uint16_t & hardwareVersion)
 {
+    /* sonoff modify start */
+    hardwareVersion = SONOFF_MATTER_HARDWARE_VERSION;
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(sizeof(hardwareVersion) >= mFlashDataHeader.HardwareVersion.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -475,12 +584,17 @@ CHIP_ERROR FactoryDataProvider::GetHardwareVersion(uint16_t & hardwareVersion)
                 mFlashDataHeader.HardwareVersion.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
 
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetHardwareVersionString(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    strncpy(buf, SONOFF_MATTER_HARDWARE_VERSION_STRING, bufSize);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.HardwareVersionString.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -491,11 +605,22 @@ CHIP_ERROR FactoryDataProvider::GetHardwareVersionString(char * buf, size_t bufS
                 mFlashDataHeader.HardwareVersionString.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetRotatingDeviceIdUniqueId(MutableByteSpan & uniqueIdSpan)
 {
+    /* sonoff modify start */
+    char uniqueIdHex[NVDM_MATTER_RD_ID_UID_HEX_LEN + 1] = { 0 };
+    size_t uniqueIdLen                                  = 0;
+
+    VerifyOrReturnError(0 == snfMatterRdIdUidGet(uniqueIdHex, sizeof(uniqueIdHex)), CHIP_ERROR_READ_FAILED);
+    uniqueIdLen = chip::Encoding::HexToBytes(uniqueIdHex, NVDM_MATTER_RD_ID_UID_HEX_LEN, uniqueIdSpan.data(), uniqueIdSpan.size());
+    VerifyOrReturnError(uniqueIdLen == (NVDM_MATTER_RD_ID_UID_HEX_LEN / 2), CHIP_ERROR_READ_FAILED);
+    uniqueIdSpan.reduce_size(uniqueIdLen);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(uniqueIdSpan.size() >= mFlashDataHeader.RotatingDeviceIdUniqueId.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -506,11 +631,16 @@ CHIP_ERROR FactoryDataProvider::GetRotatingDeviceIdUniqueId(MutableByteSpan & un
                 mFlashDataHeader.RotatingDeviceIdUniqueId.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetPartNumber(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    return CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE;
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.PartNumber.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -522,9 +652,14 @@ CHIP_ERROR FactoryDataProvider::GetPartNumber(char * buf, size_t bufSize)
                 ),
             CHIP_ERROR_READ_FAILED);
     return CHIP_NO_ERROR;
+#endif
+    /* sonoff modify end */
 };
 CHIP_ERROR FactoryDataProvider::GetProductURL(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    return CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE;
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.ProductURL.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -536,9 +671,20 @@ CHIP_ERROR FactoryDataProvider::GetProductURL(char * buf, size_t bufSize)
                 ),
             CHIP_ERROR_READ_FAILED);
     return CHIP_NO_ERROR;
+#endif
+    /* sonoff modify end */
 };
 CHIP_ERROR FactoryDataProvider::GetProductLabel(char * buf, size_t bufSize)
 {
+    /* sonoff modify start */
+    char productName[NVDM_MATTER_NAME_MAX_LEN + 1] = { 0 };
+    size_t productNameLen                          = 0;
+
+    VerifyOrReturnError(0 == snfMatterProductNameGet(productName, sizeof(productName)), CHIP_ERROR_READ_FAILED);
+    productNameLen = strlen(productName);
+    VerifyOrReturnError(bufSize > productNameLen, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(buf, productName, productNameLen + 1);
+#if 0
     ReturnErrorOnFailure(ReadFlashDataHeader());
     VerifyOrReturnError(bufSize >= mFlashDataHeader.ProductLabel.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -549,6 +695,8 @@ CHIP_ERROR FactoryDataProvider::GetProductLabel(char * buf, size_t bufSize)
                 mFlashDataHeader.ProductLabel.length
                 ),
             CHIP_ERROR_READ_FAILED);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 };
 

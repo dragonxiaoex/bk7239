@@ -133,6 +133,44 @@ static int parseDecU32(const char *str, uint32_t *value)
 }
 
 /**
+ * @brief 解析十六进制无符号16位整数.
+ *
+ * @param [in] str - 十六进制字符串, 不含0x.
+ * @param [out] value - 解析结果.
+ * @return 1表示解析成功, 0表示非法.
+ */
+static int parseHexU16(const char *str, uint16_t *value)
+{
+    uint16_t result = 0;
+    uint16_t i;
+    uint8_t nibble;
+
+    if ((str == NULL) || (str[0] == '\0') || (value == NULL))
+    {
+        return 0;
+    }
+
+    for (i = 0; str[i] != '\0'; i++)
+    {
+        if (i >= NVDM_MATTER_HEX_ID_MAX_LEN)
+        {
+            return 0;
+        }
+
+        if (hexNibble(str[i], &nibble) == 0)
+        {
+            return 0;
+        }
+
+        result = (uint16_t)((result << 4) + nibble);
+    }
+
+    *value = result;
+
+    return 1;
+}
+
+/**
  * @brief 检查十六进制字符串长度与字符是否合法.
  *
  * @param [in] str - 十六进制字符串.
@@ -379,6 +417,69 @@ static int matterItemSet(const char *key, const char *value, MatterItemIsValid i
     return 0;
 }
 
+/**
+ * @brief 读取Matter十进制配置项并解析为整数.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [out] value - 解析后的整数值.
+ * @param [in] max_len - 配置项最大字符串长度, 不含结束符.
+ * @param [in] is_valid - 合法性检查函数.
+ * @return 0表示读取成功, 负数表示失败.
+ */
+static int matterItemGetDec(const char *key,
+                            uint32_t *value,
+                            uint16_t max_len,
+                            MatterItemIsValid is_valid)
+{
+    char buff[NVDM_MATTER_DEC_U32_STR_MAX_LEN + 1];
+
+    if (value == NULL)
+    {
+        return -1;
+    }
+
+    if (matterItemGet(key, buff, sizeof(buff), max_len, is_valid) != 0)
+    {
+        return -1;
+    }
+
+    if (parseDecU32(buff, value) == 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 读取Matter十六进制ID配置项并解析为整数.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [out] value - 解析后的ID.
+ * @return 0表示读取成功, 负数表示失败.
+ */
+static int matterItemGetHexU16(const char *key, uint16_t *value)
+{
+    char buff[NVDM_MATTER_HEX_ID_MAX_LEN + 1];
+
+    if (value == NULL)
+    {
+        return -1;
+    }
+
+    if (matterItemGet(key, buff, sizeof(buff), NVDM_MATTER_HEX_ID_MAX_LEN, hexIdIsValid) != 0)
+    {
+        return -1;
+    }
+
+    if (parseHexU16(buff, value) == 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
 int snfSerialNumberGet(char *serial_number, uint16_t serial_number_size)
 {
     int ret;
@@ -430,13 +531,26 @@ int snfSerialNumberSet(const char *serial_number)
     return 0;
 }
 
-int snfMatterDiscriminatorGet(char *discriminator, uint16_t discriminator_size)
+int snfMatterDiscriminatorGet(uint16_t *discriminator)
 {
-    return matterItemGet(NVDM_MATTER_ITEM_DISCRIMINATOR,
-                         discriminator,
-                         discriminator_size,
+    uint32_t value;
+
+    if (discriminator == NULL)
+    {
+        return -1;
+    }
+
+    if (matterItemGetDec(NVDM_MATTER_ITEM_DISCRIMINATOR,
+                         &value,
                          NVDM_MATTER_DISCRIMINATOR_STR_MAX_LEN,
-                         discriminatorIsValid);
+                         discriminatorIsValid) != 0)
+    {
+        return -1;
+    }
+
+    *discriminator = (uint16_t)value;
+
+    return 0;
 }
 
 int snfMatterDiscriminatorSet(const char *discriminator)
@@ -444,13 +558,12 @@ int snfMatterDiscriminatorSet(const char *discriminator)
     return matterItemSet(NVDM_MATTER_ITEM_DISCRIMINATOR, discriminator, discriminatorIsValid);
 }
 
-int snfMatterIterationCountGet(char *iteration_count, uint16_t iteration_count_size)
+int snfMatterIterationCountGet(uint32_t *iteration_count)
 {
-    return matterItemGet(NVDM_MATTER_ITEM_ITERATION_COUNT,
-                         iteration_count,
-                         iteration_count_size,
-                         NVDM_MATTER_DEC_U32_STR_MAX_LEN,
-                         decU32IsValid);
+    return matterItemGetDec(NVDM_MATTER_ITEM_ITERATION_COUNT,
+                            iteration_count,
+                            NVDM_MATTER_DEC_U32_STR_MAX_LEN,
+                            decU32IsValid);
 }
 
 int snfMatterIterationCountSet(const char *iteration_count)
@@ -486,13 +599,9 @@ int snfMatterVerifierSet(const char *verifier)
     return matterItemSet(NVDM_MATTER_ITEM_VERIFIER, verifier, verifierIsValid);
 }
 
-int snfMatterVendorIdGet(char *vendor_id, uint16_t vendor_id_size)
+int snfMatterVendorIdGet(uint16_t *vendor_id)
 {
-    return matterItemGet(NVDM_MATTER_ITEM_VENDOR_ID,
-                         vendor_id,
-                         vendor_id_size,
-                         NVDM_MATTER_HEX_ID_MAX_LEN,
-                         hexIdIsValid);
+    return matterItemGetHexU16(NVDM_MATTER_ITEM_VENDOR_ID, vendor_id);
 }
 
 int snfMatterVendorIdSet(const char *vendor_id)
@@ -514,13 +623,9 @@ int snfMatterVendorNameSet(const char *vendor_name)
     return matterItemSet(NVDM_MATTER_ITEM_VENDOR_NAME, vendor_name, nameIsValid);
 }
 
-int snfMatterProductIdGet(char *product_id, uint16_t product_id_size)
+int snfMatterProductIdGet(uint16_t *product_id)
 {
-    return matterItemGet(NVDM_MATTER_ITEM_PRODUCT_ID,
-                         product_id,
-                         product_id_size,
-                         NVDM_MATTER_HEX_ID_MAX_LEN,
-                         hexIdIsValid);
+    return matterItemGetHexU16(NVDM_MATTER_ITEM_PRODUCT_ID, product_id);
 }
 
 int snfMatterProductIdSet(const char *product_id)
@@ -556,13 +661,12 @@ int snfMatterRdIdUidSet(const char *rd_id_uid)
     return matterItemSet(NVDM_MATTER_ITEM_RD_ID_UID, rd_id_uid, rdIdUidIsValid);
 }
 
-int snfMatterPasscodeGet(char *passcode, uint16_t passcode_size)
+int snfMatterPasscodeGet(uint32_t *passcode)
 {
-    return matterItemGet(NVDM_MATTER_ITEM_PASSCODE,
-                         passcode,
-                         passcode_size,
-                         NVDM_MATTER_DEC_U32_STR_MAX_LEN,
-                         decU32IsValid);
+    return matterItemGetDec(NVDM_MATTER_ITEM_PASSCODE,
+                            passcode,
+                            NVDM_MATTER_DEC_U32_STR_MAX_LEN,
+                            decU32IsValid);
 }
 
 int snfMatterPasscodeSet(const char *passcode)

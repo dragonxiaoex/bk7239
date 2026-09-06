@@ -58,6 +58,7 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_MT_SERIAL_NUM_QUERY       "AT+MT_SERIAL_NUM?"
 #define AT_CMD_MT_SERIAL_NUM_SET         "AT+MT_SERIAL_NUM_SET"
 #define AT_CMD_MT_FACTORY_DATA_WRITE     "AT+MT_FACTORY_DATA_WRITE"
+#define AT_CMD_MT_FACTORY_DATA_READ      "AT+MT_FACTORY_DATA_READ"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
@@ -867,6 +868,164 @@ static int atSha256HexDecode(const char *hex, uint8_t *digest)
 }
 
 /**
+ * @brief 将SHA256摘要编码为64位十六进制字符串.
+ *
+ * @param [in] digest - 32字节摘要.
+ * @param [out] hex - 十六进制输出缓冲区.
+ * @param [in] hex_size - 缓冲区长度, 需大于AT_MT_FACTORY_DATA_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int atSha256HexEncode(const uint8_t *digest, char *hex, uint16_t hex_size)
+{
+    uint16_t i;
+
+    if ((digest == NULL) || (hex == NULL) || (hex_size <= AT_MT_FACTORY_DATA_SHA256_HEX_LEN))
+    {
+        return -1;
+    }
+
+    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02X", (unsigned int)digest[i]);
+    }
+
+    hex[AT_MT_FACTORY_DATA_SHA256_HEX_LEN] = '\0';
+
+    return 0;
+}
+
+/**
+ * @brief 计算数据的SHA256十六进制摘要.
+ *
+ * @param [in] data - 待计算字符串.
+ * @param [out] hex - 64位十六进制摘要.
+ * @param [in] hex_size - 摘要缓冲区长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int atSha256DigestHex(const char *data, char *hex, uint16_t hex_size)
+{
+    SnfSha256Ctx ctx;
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    int ret;
+
+    if (data == NULL)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Update(&ctx, (const uint8_t *)data, (uint32_t)strlen(data));
+    if (ret != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    ret = snfSha256Finish(&ctx, digest, sizeof(digest));
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    return atSha256HexEncode(digest, hex, hex_size);
+}
+
+/**
+ * @brief 从NVDM拼装READ用的factory_data, 含末尾逗号.
+ *
+ * @param [out] factory_data - 拼装缓冲区.
+ * @param [in] factory_data_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示读取失败或缓冲区不足.
+ */
+static int atFactoryDataReadBuild(char *factory_data, uint16_t factory_data_size)
+{
+    uint16_t discriminator;
+    uint32_t iteration_count;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    char salt[NVDM_MATTER_SALT_STR_MAX_LEN + 1];
+    char verifier[NVDM_MATTER_VERIFIER_STR_MAX_LEN + 1];
+    char vendor_name[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char product_name[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char rd_id_uid[NVDM_MATTER_RD_ID_UID_HEX_LEN + 1];
+    int ret;
+
+    if ((factory_data == NULL) || (factory_data_size == 0))
+    {
+        return -1;
+    }
+
+    if (snfMatterDiscriminatorGet(&discriminator) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterIterationCountGet(&iteration_count) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterSaltGet(salt, sizeof(salt)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVerifierGet(verifier, sizeof(verifier)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVendorIdGet(&vendor_id) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVendorNameGet(vendor_name, sizeof(vendor_name)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterProductIdGet(&product_id) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterProductNameGet(product_name, sizeof(product_name)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterRdIdUidGet(rd_id_uid, sizeof(rd_id_uid)) != 0)
+    {
+        return -1;
+    }
+
+    ret = snprintf(factory_data,
+                   factory_data_size,
+                   "%u,%u,%s,%s,%04X,%s,%04X,%s,%s,",
+                   (unsigned int)discriminator,
+                   (unsigned int)iteration_count,
+                   salt,
+                   verifier,
+                   (unsigned int)vendor_id,
+                   vendor_name,
+                   (unsigned int)product_id,
+                   product_name,
+                   rd_id_uid);
+    if ((ret < 0) || (ret >= (int)factory_data_size))
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
  * @brief 校验factory_data含末尾逗号的SHA256摘要.
  *
  * @param [in] fields - 10个工厂数据字段.
@@ -1002,6 +1161,52 @@ static void atMtFactoryDataWriteCommand(char *pcWriteBuffer, int xWriteBufferLen
 }
 
 /**
+ * @brief 处理AT+MT_FACTORY_DATA_READ读取命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtFactoryDataReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char factory_data[BUFF_SIZE_512];
+    char sha256_hex[AT_MT_FACTORY_DATA_SHA256_HEX_LEN + 1];
+    char value[BUFF_SIZE_512];
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    if (atFactoryDataReadBuild(factory_data, sizeof(factory_data)) != 0)
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    if (atSha256DigestHex(factory_data, sha256_hex, sizeof(sha256_hex)) != 0)
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    ret = snprintf(value, sizeof(value), "%s%s", factory_data, sha256_hex);
+    if ((ret < 0) || (ret >= (int)sizeof(value)))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_FACTORY_DATA_READ, value);
+}
+
+/**
  * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
  */
 static const struct cli_command snfAtCliCommands[] = {
@@ -1010,6 +1215,7 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_MT_SERIAL_NUM_QUERY, "query product serial number", atMtSerialNumQueryCommand},
     {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
     {AT_CMD_MT_FACTORY_DATA_WRITE, "write matter factory data", atMtFactoryDataWriteCommand},
+    {AT_CMD_MT_FACTORY_DATA_READ, "read matter factory data", atMtFactoryDataReadCommand},
 };
 
 #define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))
