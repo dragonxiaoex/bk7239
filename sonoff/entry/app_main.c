@@ -15,7 +15,7 @@ void user_app_main(void)
     rtos_delay_milliseconds(2000);
     extern void sonoffEntry(void);
     sonoffEntry();
-    bk_openthread_init();
+    //bk_openthread_init();
     rtos_delete_thread(NULL);
     /* sonoff modify end */
 }

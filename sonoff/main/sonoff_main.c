@@ -22,6 +22,7 @@
 #include "sonoff_nvdm.h"
 #include "sonoff_task_def.h"
 #include "sonoff_net_test.h"
+#include "sonoff_ui_handle.h"
 
 /** @brief 主任务日志标签. */
 static const char *tag = "SNF-MAIN";
@@ -136,6 +137,8 @@ int snfMainInit(void)
         LOG_E(tag, "cli init failed, ret=%d", ret);
         return -2;
     }
+
+    snfUiHandleStart();
 
     if (main_state->event_queue == NULL)
     {

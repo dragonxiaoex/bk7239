@@ -27,6 +27,7 @@
 #include "sonoff_project_config.h"
 #include "sonoff_sha256.h"
 #include "xf_lcd_nv3007.h"
+#include "sonoff_ui_test.h"
 
 static const char *tag = "SNF-CLI";
 
@@ -42,6 +43,9 @@ static const char *tag = "SNF-CLI";
 
 /** @brief 单次printf分段长度, 需小于平台__wrap_printf的127字节限制. */
 #define SNF_CLI_PRINTF_CHUNK_SIZE        120
+
+/** @brief 重启命令延时. */
+#define SNF_CLI_REBOOT_DELAY_MS          5000
 
 #define SNF_LCD_COLOR_BLACK              0x0000U
 #define SNF_LCD_COLOR_BLUE               0x001fU
@@ -282,7 +286,7 @@ static void snfLcdCliCommand(int argc, char **argv)
 
     if (argc == 1)
     {
-        ret = xf_lcd_init();
+        /* ret = xf_lcd_init();
         if (ret == 0)
         {
             xf_lcd_full_color(SNF_LCD_COLOR_BLACK);
@@ -295,7 +299,8 @@ static void snfLcdCliCommand(int argc, char **argv)
             xf_lcd_full_color(SNF_LCD_COLOR_BLUE);
             vTaskDelay(pdMS_TO_TICKS(SNF_LCD_CLI_COLOR_DELAY_MS));
             xf_lcd_full_color(SNF_LCD_COLOR_WHITE);
-        }
+        } */
+        ret = snfUiTestSubmit();
 
         printf("sonoff lcd ret=%d\r\n", ret);
     }
@@ -470,6 +475,33 @@ static void taskCliCommand(int argc, char **argv)
 }
 
 /**
+ * @brief 打印重启命令帮助.
+ */
+static void rebootCliPrintHelp(void)
+{
+    printf("sonoff reboot\r\n");
+}
+
+/**
+ * @brief 处理重启串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为reboot.
+ * @param [in] argv - 参数列表.
+ */
+static void rebootCliCommand(int argc, char **argv)
+{
+    if ((argc != 1) || (argv == NULL))
+    {
+        rebootCliPrintHelp();
+        return;
+    }
+
+    printf("sonoff reboot in %d ms\r\n", SNF_CLI_REBOOT_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(SNF_CLI_REBOOT_DELAY_MS));
+    bk_reboot();
+}
+
+/**
  * @brief 打印NVDM测试命令帮助.
  */
 static void snfNvdmCliPrintHelp(void)
@@ -535,6 +567,7 @@ static const SnfCliEntry snf_cli_command_table[] = {
     {"nvdm", "NVDM test commands", &snfNvdmCliCommand, &snfNvdmCliPrintHelp},
     {"mem", "show heap memory", &memCliCommand, &memCliPrintHelp},
     {"task", "show task list", &taskCliCommand, &taskCliPrintHelp},
+    {"reboot", "reboot device after delay", &rebootCliCommand, &rebootCliPrintHelp},
 };
 
 #define SNF_CLI_COMMAND_COUNT (sizeof(snf_cli_command_table) / sizeof(snf_cli_command_table[0]))

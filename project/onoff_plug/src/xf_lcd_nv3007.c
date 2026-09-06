@@ -10,6 +10,7 @@
  */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include <driver/gpio.h>
 #include <os/os.h>
@@ -19,7 +20,7 @@
 
 #define LCD_COL                 (142U)
 #define LCD_ROW                 (428U)
-#define LCD_COL_OFFSET          (14U)
+#define LCD_COL_OFFSET          (12)
 #define LCD_ROW_OFFSET          (0U)
 
 #define LCD_DC_PIN              GPIO_16
@@ -153,8 +154,9 @@ static void xf_lcd_send_data_array(const uint8_t *data, uint32_t length)
  */
 static void xf_lcd_nv3007_init(void)
 {
+    /* 显示方向设置. */
     xf_lcd_send_cmd(0x36);
-    xf_lcd_send_data(0x60);
+    xf_lcd_send_data(0xa0);
 
     /* NV3006A1N IVO2.6初始化序列. */
     xf_lcd_send_cmd(0xff);
@@ -423,6 +425,7 @@ int xf_lcd_init(void)
     {
         xfLcdReset();
         xf_lcd_nv3007_init();
+        xf_lcd_bl_output(1);
     }
 
     return ret;

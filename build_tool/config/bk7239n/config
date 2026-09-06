@@ -41,8 +41,8 @@ CONFIG_PSRAM=n
 # Non-empty so CMake still links libMatterApp.a. Overlay libCHIP.mk
 # compiles the assembled product matter/ tree instead of CHIP examples/.
 CONFIG_MATTER_EXAMPLE="sonoff onoff plug"
-CONFIG_MATTER_START=y
-CONFIG_SUPPORT_MATTER=y
+CONFIG_MATTER_START=n
+CONFIG_SUPPORT_MATTER=n
 CONFIG_DYNAMIC_LOAD_MATTER=n
 CONFIG_MBEDTLS=n
 CONFIG_MBEDTLS_ACCELERATOR=n
