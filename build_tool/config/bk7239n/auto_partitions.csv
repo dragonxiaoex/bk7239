@@ -7,8 +7,7 @@ primary_cpu0_app,,2380k,code,TRUE,FALSE
 ota,,1496K,data,TRUE,TRUE
 usr_config,,28K,data,TRUE,TRUE
 matter,,84K,data,TRUE,TRUE
-matter_factory,,8K,data,TRUE,TRUE
-easyflash,,8K,data,TRUE,TRUE
+easyflash,,16K,data,TRUE,TRUE
 ot_setting,,16K,data,TRUE,TRUE
 sys_rf,0x3FE000,4K,data,TRUE,TRUE
 sys_net,0x3FF000,4K,data,TRUE,TRUE

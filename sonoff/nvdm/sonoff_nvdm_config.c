@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <FreeRTOS.h>
 #include <components/system.h>
 
 #include "cJSON.h"
@@ -1854,7 +1855,7 @@ static void matterSecureSessionClear(MatterSecureSession *session)
  */
 static int matterBinSet(const char *key, const uint8_t *data, uint32_t data_len)
 {
-    char b64[NVDM_MATTER_CERT_B64_MAX_LEN + 1];
+    char *b64;
     uint32_t b64_len;
     int ret;
 
@@ -1863,13 +1864,26 @@ static int matterBinSet(const char *key, const uint8_t *data, uint32_t data_len)
         return -1;
     }
 
-    ret = snfBase64Encode((uint8_t *)b64, sizeof(b64), &b64_len, data, data_len);
-    if ((ret != SNF_BASE64_OK) || (b64_len == 0) || (b64_len > NVDM_MATTER_CERT_B64_MAX_LEN))
+    b64 = (char *)pvPortMalloc(NVDM_MATTER_CERT_B64_MAX_LEN + 1);
+    if (b64 == NULL)
     {
+        LOG_E(tag, "matter bin set alloc failed");
         return -1;
     }
 
-    return matterItemSet(key, b64);
+    ret = snfBase64Encode((uint8_t *)b64, NVDM_MATTER_CERT_B64_MAX_LEN + 1, &b64_len, data, data_len);
+    if ((ret != SNF_BASE64_OK) || (b64_len == 0) || (b64_len > NVDM_MATTER_CERT_B64_MAX_LEN))
+    {
+        mbedtls_platform_zeroize(b64, NVDM_MATTER_CERT_B64_MAX_LEN + 1);
+        vPortFree(b64);
+        return -1;
+    }
+
+    ret = matterItemSet(key, b64);
+    mbedtls_platform_zeroize(b64, NVDM_MATTER_CERT_B64_MAX_LEN + 1);
+    vPortFree(b64);
+
+    return ret;
 }
 
 /**
@@ -1883,27 +1897,40 @@ static int matterBinSet(const char *key, const uint8_t *data, uint32_t data_len)
  */
 static int matterBinGet(const char *key, uint8_t *data, uint16_t data_size, uint16_t *data_len)
 {
-    char b64[NVDM_MATTER_CERT_B64_MAX_LEN + 1];
+    char *b64;
     uint32_t decoded_len;
+    int ret = -1;
 
     if ((key == NULL) || (data == NULL) || (data_len == NULL))
     {
         return -1;
     }
 
-    if (matterItemGet(key, b64, sizeof(b64), NVDM_MATTER_CERT_B64_MAX_LEN) != 0)
+    b64 = (char *)pvPortMalloc(NVDM_MATTER_CERT_B64_MAX_LEN + 1);
+    if (b64 == NULL)
     {
+        LOG_E(tag, "matter bin get alloc failed");
         return -1;
+    }
+
+    if (matterItemGet(key, b64, NVDM_MATTER_CERT_B64_MAX_LEN + 1, NVDM_MATTER_CERT_B64_MAX_LEN) != 0)
+    {
+        goto exit;
     }
 
     if (matterBase64Decode(b64, data, data_size, &decoded_len) != 0)
     {
-        return -1;
+        goto exit;
     }
 
     *data_len = (uint16_t)decoded_len;
+    ret = 0;
 
-    return 0;
+exit:
+    mbedtls_platform_zeroize(b64, NVDM_MATTER_CERT_B64_MAX_LEN + 1);
+    vPortFree(b64);
+
+    return ret;
 }
 
 /**
@@ -1974,85 +2001,76 @@ static int matterSecureCertParse(const uint8_t *plain, uint32_t plain_len,
  */
 static int matterSecureCertStoredHash(uint8_t *digest)
 {
-    uint8_t dac[NVDM_MATTER_DAC_CERT_BIN_MAX_LEN];
-    uint8_t key[NVDM_MATTER_DAC_KEY_BIN_LEN];
-    uint8_t pai[NVDM_MATTER_PAI_CERT_BIN_MAX_LEN];
-    uint8_t header[NVDM_MATTER_SECURE_CERT_HEADER_LEN];
+    uint8_t *plain;
     uint16_t dac_len;
     uint16_t key_len;
     uint16_t pai_len;
     uint32_t dac_len32;
     uint32_t key_len32;
     uint32_t pai_len32;
-    SnfSha256Ctx ctx;
+    uint32_t plain_len;
+    int ret = -1;
 
     if (digest == NULL)
     {
         return -1;
     }
 
-    if (matterBinGet(NVDM_MATTER_ITEM_DAC_CERT, dac, sizeof(dac), &dac_len) != 0)
+    plain = (uint8_t *)pvPortMalloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    if (plain == NULL)
     {
+        LOG_E(tag, "secure cert hash alloc failed");
         return -1;
     }
 
-    if (matterBinGet(NVDM_MATTER_ITEM_DAC_KEY, key, sizeof(key), &key_len) != 0)
+    if (matterBinGet(NVDM_MATTER_ITEM_DAC_CERT,
+                     &plain[NVDM_MATTER_SECURE_CERT_HEADER_LEN],
+                     NVDM_MATTER_DAC_CERT_BIN_MAX_LEN,
+                     &dac_len) != 0)
     {
-        return -1;
+        goto exit;
     }
 
-    if (matterBinGet(NVDM_MATTER_ITEM_PAI_CERT, pai, sizeof(pai), &pai_len) != 0)
+    if (matterBinGet(NVDM_MATTER_ITEM_DAC_KEY,
+                     &plain[NVDM_MATTER_SECURE_CERT_HEADER_LEN + dac_len],
+                     NVDM_MATTER_DAC_KEY_BIN_LEN,
+                     &key_len) != 0)
     {
-        return -1;
+        goto exit;
     }
 
     if (key_len != NVDM_MATTER_DAC_KEY_BIN_LEN)
     {
-        return -1;
+        goto exit;
+    }
+
+    if (matterBinGet(NVDM_MATTER_ITEM_PAI_CERT,
+                     &plain[NVDM_MATTER_SECURE_CERT_HEADER_LEN + dac_len + key_len],
+                     NVDM_MATTER_PAI_CERT_BIN_MAX_LEN,
+                     &pai_len) != 0)
+    {
+        goto exit;
     }
 
     dac_len32 = (uint32_t)dac_len;
     key_len32 = (uint32_t)key_len;
     pai_len32 = (uint32_t)pai_len;
-    memcpy(&header[0], &dac_len32, sizeof(dac_len32));
-    memcpy(&header[4], &key_len32, sizeof(key_len32));
-    memcpy(&header[8], &pai_len32, sizeof(pai_len32));
-
-    if (snfSha256Init(&ctx) != SNF_SHA256_OK)
+    memcpy(&plain[0], &dac_len32, sizeof(dac_len32));
+    memcpy(&plain[4], &key_len32, sizeof(key_len32));
+    memcpy(&plain[8], &pai_len32, sizeof(pai_len32));
+    plain_len = NVDM_MATTER_SECURE_CERT_HEADER_LEN + dac_len32 + key_len32 + pai_len32;
+    if (sha256Bytes(plain, plain_len, digest) != 0)
     {
-        return -1;
+        goto exit;
     }
 
-    if (snfSha256Update(&ctx, header, sizeof(header)) != SNF_SHA256_OK)
-    {
-        snfSha256Free(&ctx);
-        return -1;
-    }
+    ret = 0;
 
-    if (snfSha256Update(&ctx, dac, dac_len32) != SNF_SHA256_OK)
-    {
-        snfSha256Free(&ctx);
-        return -1;
-    }
+exit:
+    mbedtls_platform_zeroize(plain, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    vPortFree(plain);
 
-    if (snfSha256Update(&ctx, key, key_len32) != SNF_SHA256_OK)
-    {
-        snfSha256Free(&ctx);
-        return -1;
-    }
-
-    if (snfSha256Update(&ctx, pai, pai_len32) != SNF_SHA256_OK)
-    {
-        snfSha256Free(&ctx);
-        return -1;
-    }
-
-    if (snfSha256Finish(&ctx, digest, SNF_SHA256_DIGEST_SIZE) != SNF_SHA256_OK)
-    {
-        return -1;
-    }
-
-    return 0;
+    return ret;
 }
 
 int snfMatterPubKeyGet(char *pub_hex, uint16_t pub_hex_size, char *sha256_hex, uint16_t sha256_size)
@@ -2235,8 +2253,8 @@ int snfMatterSecureCertWrite(const char *data_len, const char *base64, const cha
         goto cleanup;
     }
 
-    cipher = (uint8_t *)malloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
-    plain = (uint8_t *)malloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    cipher = (uint8_t *)pvPortMalloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    plain = (uint8_t *)pvPortMalloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
     if ((cipher == NULL) || (plain == NULL))
     {
         LOG_E(tag, "secure cert write alloc failed");
@@ -2268,6 +2286,10 @@ int snfMatterSecureCertWrite(const char *data_len, const char *base64, const cha
         goto cleanup;
     }
 
+    mbedtls_platform_zeroize(cipher, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    vPortFree(cipher);
+    cipher = NULL;
+
     if (matterSecureCertParse(plain, plain_len, &dac_cert, &dac_cert_len,
                               &dac_key, &dac_key_len, &pai_cert, &pai_cert_len) != 0)
     {
@@ -2297,6 +2319,10 @@ int snfMatterSecureCertWrite(const char *data_len, const char *base64, const cha
         goto cleanup;
     }
 
+    mbedtls_platform_zeroize(plain, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    vPortFree(plain);
+    plain = NULL;
+
     if (matterSecureCertStoredHash(stored) != 0)
     {
         snfMatterSecureCertClear();
@@ -2322,13 +2348,13 @@ cleanup:
     if (cipher != NULL)
     {
         mbedtls_platform_zeroize(cipher, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
-        free(cipher);
+        vPortFree(cipher);
     }
 
     if (plain != NULL)
     {
         mbedtls_platform_zeroize(plain, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
-        free(plain);
+        vPortFree(plain);
     }
 
     mbedtls_platform_zeroize(secret, sizeof(secret));

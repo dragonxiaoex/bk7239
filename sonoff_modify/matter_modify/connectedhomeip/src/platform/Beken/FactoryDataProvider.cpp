@@ -52,6 +52,8 @@ CHIP_ERROR LoadKeypairFromRaw(ByteSpan private_key, ByteSpan public_key, Crypto:
     return keypair.Deserialize(serialized_keypair);
 }
 
+/* sonoff modify start */
+#if 0
 static uint8_t bk_flash_read(bk_partition_t inPartition, uint32_t offset, uint8_t *value, uint32_t length)
 {
     bk_logic_partition_t *partition_info =  bk_flash_partition_get_info((bk_partition_t)inPartition);//BK_PARTITION_MATTER_FACTORY
@@ -101,8 +103,7 @@ CHIP_ERROR FactoryDataProvider::ReadCertDataHeader()
     }
     return CHIP_NO_ERROR;
 }
-/* sonoff modify start */
-#if 0
+
 CHIP_ERROR FactoryDataProvider::ReadFlashDataHeader()
 {
     if(mFlashDataHeader.magic_code != 0)

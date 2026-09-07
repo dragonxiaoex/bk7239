@@ -1,22 +1,38 @@
-# Matter 生产数据未适配项
+# Matter 生产数据
 
-BK 工厂分区分两段：`+0KB` 证书区、`+4KB` 设备信息区。设备信息区已迁到 NVDM/工程宏。下面只列证书区还没接的项。
+运行时不再读 `BK_PARTITION_MATTER_FACTORY`。证书、配对参数和设备信息都从 NVDM（EasyFlash）或工程宏取。接入点仍是 overlay 里的 `FactoryDataProvider`。
 
-证书实际地址：`item.off_set + header_length`。Header 校验：`magic_code >= 0xF5F50000`。
+NVDM 组名为 `matter`。CD / DAC / PAI / DAC 密钥以 Base64 字符串存储，读取时解码为二进制。
 
-| Matter 接口 | BK Flash 字段 | 编码 | 说明 |
-|---|---|---|---|
-| `GetCertificationDeclaration` | `CertificationDeclaration` | 二进制 CD | 从 NVDM `matter.CD` 读 Base64 并解码 |
-| `GetDeviceAttestationCert` | `DeviceAttestationCert` | 二进制 DAC | 仍读 `BK_PARTITION_MATTER_FACTORY` |
-| `GetProductAttestationIntermediateCert` | `ProductAttestationIntermediateCert` | 二进制 PAI | 仍读 BK Flash |
-| `SignWithDeviceAttestationKey` | `DacPublicKey` + `DacPrivateKey` | 原始密钥 | 用 DAC 私钥对消息做 ECDSA 签名 |
+| Matter 接口 | 来源 | 说明 |
+|---|---|---|
+| `GetCertificationDeclaration` | `matter.CD` | `snfMatterCDGet` |
+| `GetDeviceAttestationCert` | `matter.DAC.CERT` | `snfMatterDacCertGet`，DER |
+| `GetProductAttestationIntermediateCert` | `matter.PAI.CERT` | `snfMatterPaiCertGet`，DER |
+| `SignWithDeviceAttestationKey` | `matter.DAC.CERT` + `matter.DAC.KEY` | DAC 证书提取公钥，私钥 RAW 32 字节，拼成 `P256Keypair` 后 `ECDSA_sign_msg` |
+| `GetFirmwareInformation` | 空 | BK 原实现就是空的 |
+| `GetSetupDiscriminator` | `matter.discriminator` | |
+| `GetSpake2pIterationCount` | `matter.iteration.count` | |
+| `GetSpake2pSalt` | `matter.salt` | Base64 |
+| `GetSpake2pVerifier` | `matter.verifier` | Base64 |
+| `GetSetupPasscode` | `matter.passcode` | |
+| `GetVendorName` | `matter.vendor.name` | |
+| `GetVendorId` | `matter.vendor.id` | |
+| `GetProductName` | `matter.product.name` | |
+| `GetProductId` | `matter.product.id` | |
+| `GetSerialNumber` | `factory.serial.number` | 14 位产品识别码 |
+| `GetRotatingDeviceIdUniqueId` | `matter.rd.id.uid` | 32 位 hex 解码为 16 字节 |
+| `GetProductLabel` | `matter.product.name` | 与产品名称相同 |
+| `GetHardwareVersion` | `SONOFF_MATTER_HARDWARE_VERSION` | 工程宏 |
+| `GetHardwareVersionString` | `SONOFF_MATTER_HARDWARE_VERSION_STRING` | 工程宏 |
+| `GetManufacturingDate` | 未提供 | `CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE` |
+| `GetPartNumber` | 未提供 | 同上 |
+| `GetProductURL` | 未提供 | 同上 |
 
-DAC 密钥约定：
+产测写入：
 
-- 公钥最长 70 字节，私钥最长 40 字节
-- `CONFIG_BEKEN_DAC_PRIV_ENCRYPT=1` 时，私钥为 `13 字节 nonce + AES-CTR 密文`，AES-128 密钥写在 `FactoryDataProvider.h`
-- 签名时把公私钥拼成 `P256Keypair`，再 `ECDSA_sign_msg`
+- 工厂数据：`AT+MT_FACTORY_DATA_WRITE` / `READ`
+- CD：`AT+MT_CD_WRITE` / `READ` / `DELETE`
+- DAC / DAC 密钥 / PAI：先 `AT+MT_PUB_KEY_GET` + `AT+MT_PUB_KEY_SET`，再 `AT+MT_SECURE_CERT_WRITE`；查询 `AT+MT_SECURE_CERT_READ`，删除 `AT+MT_SECURE_CERT_DELETE`
 
-`GetFirmwareInformation` 在 BK 原实现里就是空的，不必迁。
-
-接入点仍是 `FactoryDataProvider` 里上述 4 个接口。NVDM 侧还没有对应条目，需要先补存储和 get 接口，再替换 `bk_flash_read`。
+overlay 里对 `BK_PARTITION_MATTER_FACTORY` 的旧读路径保留在 `#if 0` 中，不参与编译。

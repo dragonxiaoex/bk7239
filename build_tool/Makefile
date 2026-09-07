@@ -15,6 +15,7 @@ OVERLAY_ROOT    := $(ROOT)/sonoff_modify
 IDK_OVERLAY     := $(OVERLAY_ROOT)/idk_modify
 MATTER_OVERLAY  := $(OVERLAY_ROOT)/matter_modify
 OPENTHREAD_OVERLAY := $(OVERLAY_ROOT)/openthread_modify
+ADAPTER_OVERLAY := $(OVERLAY_ROOT)/adapter_modify
 BUILD_DIR       := $(ROOT)/build
 CHIP_DIR        := $(SDK_DIR)/components/matter/connectedhomeip
 OPENTHREAD_DIR  := $(SDK_DIR)/components/openthread
@@ -48,8 +49,10 @@ help:
 	@echo "  make MODEL=<name> clean        remove that project's build output"
 	@echo "  make restore                   restore bk_openthread / bk_idk via git"
 	@echo ""
-	@echo "  overlay: sonoff_modify/idk_modify    -> bk_openthread/bk_idk"
-	@echo "           sonoff_modify/matter_modify -> bk_openthread/components/matter"
+	@echo "  overlay: sonoff_modify/idk_modify       -> bk_openthread/bk_idk"
+	@echo "           sonoff_modify/matter_modify    -> bk_openthread/components/matter"
+	@echo "           sonoff_modify/openthread_modify -> bk_openthread/components/openthread"
+	@echo "           sonoff_modify/adapter_modify   -> bk_openthread/components/adapter"
 	@echo ""
 	@echo "  shared : config/  matter/  product/CMakeLists.txt -> components/main"
 	@echo "  product: ../project/\$$(MODEL)/src  ../project/\$$(MODEL)/inc  + ../sonoff/"
@@ -128,6 +131,7 @@ apply_overlay:
 	@$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR))
 	@$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter)
 	@$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR))
+	@$(call overlay_copy,$(ADAPTER_OVERLAY),$(SDK_DIR)/components/adapter)
 
 restore:
 	@$(call restore_sdk)
@@ -141,6 +145,7 @@ build:
 	$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR)); \
 	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
 	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
+	$(call overlay_copy,$(ADAPTER_OVERLAY),$(SDK_DIR)/components/adapter); \
 	echo "[sonoff] MODEL=$(MODEL) SOC=$(SOC)"; \
 	echo "[sonoff] PROJECT_DIR=$(PROJECT_DIR)"; \
 	export SONOFF_ROOT="$(ROOT)"; \
@@ -159,6 +164,7 @@ menuconfig:
 	$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR)); \
 	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
 	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
+	$(call overlay_copy,$(ADAPTER_OVERLAY),$(SDK_DIR)/components/adapter); \
 	echo "[sonoff] menuconfig MODEL=$(MODEL) SOC=$(SOC)"; \
 	export SONOFF_ROOT="$(ROOT)"; \
 	export MODEL="$(MODEL)"; \
