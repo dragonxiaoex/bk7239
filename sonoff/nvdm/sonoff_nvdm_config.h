@@ -19,7 +19,7 @@ extern "C" {
 
 /** @brief Matter配置项键名. */
 #define NVDM_MATTER_ITEM_DISCRIMINATOR      "discriminator"
-#define NVDM_MATTER_ITEM_ITERATION_COUNT    "iteration-count"
+#define NVDM_MATTER_ITEM_ITERATION_COUNT    "iteration.count"
 #define NVDM_MATTER_ITEM_SALT               "salt"
 #define NVDM_MATTER_ITEM_VERIFIER           "verifier"
 #define NVDM_MATTER_ITEM_VENDOR_ID          "vendor.id"
@@ -30,10 +30,22 @@ extern "C" {
 #define NVDM_MATTER_ITEM_PASSCODE           "passcode"
 
 /** @brief 工厂配置项键名. */
-#define NVDM_FACTORY_ITEM_SERIAL_NUMBER     "serial-number"
+#define NVDM_FACTORY_ITEM_SERIAL_NUMBER     "serial.number"
+#define NVDM_FACTORY_ITEM_ACTIVE_CODE       "active.code"
+#define NVDM_FACTORY_ITEM_DEVICE_ID         "device.id"
+#define NVDM_FACTORY_ITEM_FACTORY_APIKEY    "factory.apikey"
+#define NVDM_FACTORY_ITEM_DEVICE_MODEL      "device.model"
+#define NVDM_FACTORY_ITEM_DEVICE_UUID       "device.uuid"
+#define NVDM_FACTORY_ITEM_BASE_MAC          "base.mac"
 
 /** @brief 产品识别码十进制数字长度. */
 #define NVDM_FACTORY_SERIAL_NUMBER_LEN      14
+
+/** @brief 授权码二进制长度. */
+#define NVDM_FACTORY_ACTIVE_CODE_LEN        16
+
+/** @brief 授权码十六进制字符串长度. */
+#define NVDM_FACTORY_ACTIVE_CODE_HEX_LEN    32
 
 /** @brief 鉴别器最大值, 12-bit. */
 #define NVDM_MATTER_DISCRIMINATOR_MAX       4095
@@ -75,6 +87,34 @@ int snfSerialNumberGet(char *serial_number, uint16_t serial_number_size);
  * @return 0表示写入成功, 负数表示参数非法或写入失败.
  */
 int snfSerialNumberSet(const char *serial_number);
+
+/**
+ * @brief 读取设备授权码.
+ *
+ * @param [out] active_code - 授权码缓冲区, 需能容纳32位十六进制和结束符.
+ * @param [in] active_code_size - 缓冲区长度.
+ * @return 0表示读取成功, 负数表示未设置或读取失败.
+ */
+int snfActiveCodeGet(char *active_code, uint16_t active_code_size);
+
+/**
+ * @brief 写入设备授权码.
+ *
+ * 写入前用本机ChipID重新计算授权码, 与入参一致才允许写入.
+ *
+ * @param [in] active_code - 32位十六进制字符串.
+ * @return 0表示写入成功, 负数表示参数非法、与本机不匹配或写入失败.
+ */
+int snfActiveCodeSet(const char *active_code);
+
+/**
+ * @brief 检查当前芯片是否已授权.
+ *
+ * 明文为芯片唯一ID的16字节AES块: 当前使用6字节MAC, 其余字节补0.
+ *
+ * @return 0表示已授权, 负数表示未授权或校验失败.
+ */
+int snfActiveCodeIsAuthorized(void);
 
 /**
  * @brief 读取Matter鉴别器.

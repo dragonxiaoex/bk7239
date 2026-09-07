@@ -51,6 +51,12 @@ static const SnfNvdmItem nvdm_user_item_array[] = {
 
 static const SnfNvdmItem nvdm_factory_item_array[] = {
     NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_SERIAL_NUMBER, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_ACTIVE_CODE, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_ID, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_FACTORY_APIKEY, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_BASE_MAC, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_MODEL, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_UUID, ""),
 };
 
 static const SnfNvdmItem nvdm_matter_item_array[] = {

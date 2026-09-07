@@ -59,6 +59,8 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_MT_SERIAL_NUM_SET         "AT+MT_SERIAL_NUM_SET"
 #define AT_CMD_MT_FACTORY_DATA_WRITE     "AT+MT_FACTORY_DATA_WRITE"
 #define AT_CMD_MT_FACTORY_DATA_READ      "AT+MT_FACTORY_DATA_READ"
+#define AT_CMD_ACTIVE_CODE               "AT+ACTIVE_CODE"
+#define AT_CMD_ACTIVE_CODE_QUERY         "AT+ACTIVE_CODE?"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
@@ -382,15 +384,16 @@ static void taskCliPrintHelp(void)
 /**
  * @brief 按行分段打印字符串, 避免一次printf超过平台截断长度.
  *
- * @param [in,out] text - 待打印缓冲区, 打印过程中会临时改写再恢复.
+ * @param [in] text - 待打印字符串.
  */
-static void printLines(char *text)
+static void printLines(const char *text)
 {
+    char chunk[SNF_CLI_PRINTF_CHUNK_SIZE + 1];
     uint32_t start;
     uint32_t end;
     uint32_t chunk_end;
     uint32_t i;
-    char saved;
+    uint32_t n;
 
     if (text == NULL)
     {
@@ -421,17 +424,25 @@ static void printLines(char *text)
                     chunk_end = end;
                 }
 
-                saved = text[chunk_end];
-                text[chunk_end] = '\0';
-                printf("\n\r%s", &text[i]);
-                text[chunk_end] = saved;
+                n = chunk_end - i;
+                memcpy(chunk, &text[i], n);
+                chunk[n] = '\0';
+                printf("%s", chunk);
                 i = chunk_end;
             }
         }
 
-        while ((text[end] == '\r') || (text[end] == '\n'))
+        if ((text[end] == '\r') || (text[end] == '\n'))
         {
-            end++;
+            if (end != start)
+            {
+                printf("\n\r");
+            }
+
+            while ((text[end] == '\r') || (text[end] == '\n'))
+            {
+                end++;
+            }
         }
 
         start = end;
@@ -619,7 +630,9 @@ static void atPrintError(const char *cmd)
  */
 static void atPrintValue(const char *cmd, const char *value)
 {
-    printf("%s=%s\r\n", cmd, value);
+    printf("%s=", cmd);
+    printLines(value);
+    printf("\r\n");
 }
 
 /**
@@ -627,12 +640,12 @@ static void atPrintValue(const char *cmd, const char *value)
  *
  * @param [out] uid - 唯一标识缓冲区.
  * @param [in] uid_size - 缓冲区长度.
- * @param [out] uid_len - 实际有效字节数.
+ * @param [out] uid_len - 实际有效字节数, 固定为16, 前6字节为MAC其余补0.
  * @return 0表示成功, 负数表示失败.
  */
 static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
 {
-    if ((uid == NULL) || (uid_len == NULL) || (uid_size < BK_MAC_ADDR_LEN))
+    if ((uid == NULL) || (uid_len == NULL) || (uid_size < NVDM_FACTORY_ACTIVE_CODE_LEN))
     {
         return -1;
     }
@@ -648,7 +661,7 @@ static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
         return -1;
     }
 
-    *uid_len = BK_MAC_ADDR_LEN;
+    *uid_len = NVDM_FACTORY_ACTIVE_CODE_LEN;
 
     return 0;
 }
@@ -789,6 +802,62 @@ static void atMtSerialNumSetCommand(char *pcWriteBuffer, int xWriteBufferLen, in
     }
 
     atPrintValue(AT_CMD_MT_SERIAL_NUM_SET, "OK");
+}
+
+/**
+ * @brief 处理AT+ACTIVE_CODE写入命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atActiveCodeCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 2) || (argv == NULL) || (argv[1] == NULL))
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    if (snfActiveCodeSet(argv[1]) != 0)
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_ACTIVE_CODE, "OK");
+}
+
+/**
+ * @brief 处理AT+ACTIVE_CODE?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atActiveCodeQueryCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    if (snfActiveCodeIsAuthorized() != 0)
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_ACTIVE_CODE, "OK");
 }
 
 /**
@@ -1216,6 +1285,8 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
     {AT_CMD_MT_FACTORY_DATA_WRITE, "write matter factory data", atMtFactoryDataWriteCommand},
     {AT_CMD_MT_FACTORY_DATA_READ, "read matter factory data", atMtFactoryDataReadCommand},
+    {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
+    {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
 };
 
 #define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))
