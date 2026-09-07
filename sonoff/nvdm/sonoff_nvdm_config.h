@@ -29,6 +29,9 @@ extern "C" {
 #define NVDM_MATTER_ITEM_RD_ID_UID          "rd.id.uid"
 #define NVDM_MATTER_ITEM_PASSCODE           "passcode"
 #define NVDM_MATTER_ITEM_CD                 "CD"
+#define NVDM_MATTER_ITEM_DAC_CERT           "DAC.CERT"
+#define NVDM_MATTER_ITEM_DAC_KEY            "DAC.KEY"
+#define NVDM_MATTER_ITEM_PAI_KEY            "PAI.KEY"
 
 /** @brief 工厂配置项键名. */
 #define NVDM_FACTORY_ITEM_SERIAL_NUMBER     "serial.number"

@@ -71,6 +71,9 @@ static const SnfNvdmItem nvdm_matter_item_array[] = {
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_RD_ID_UID, ""),
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PASSCODE, "0"),
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_CD, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_DAC_CERT, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_DAC_KEY, ""),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PAI_CERT, ""),
 };
 
 static const SnfNvdmItemTable nvdm_item_table_array[] = {

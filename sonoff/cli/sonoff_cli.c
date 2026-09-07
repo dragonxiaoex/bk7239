@@ -41,9 +41,6 @@ static const char *tag = "SNF-CLI";
 /** @brief vTaskList单行缓冲长度. */
 #define SNF_CLI_TASK_LIST_LINE_SIZE      (configMAX_TASK_NAME_LEN + 18)
 
-/** @brief 单次printf分段长度, 需小于平台__wrap_printf的127字节限制. */
-#define SNF_CLI_PRINTF_CHUNK_SIZE        120
-
 #define SNF_LCD_COLOR_BLACK              0x0000U
 #define SNF_LCD_COLOR_BLUE               0x001fU
 #define SNF_LCD_COLOR_GREEN              0x07e0U
@@ -391,74 +388,6 @@ static void taskCliPrintHelp(void)
 }
 
 /**
- * @brief 按行分段打印字符串, 避免一次printf超过平台截断长度.
- *
- * @param [in] text - 待打印字符串.
- */
-static void printLines(const char *text)
-{
-    char chunk[SNF_CLI_PRINTF_CHUNK_SIZE + 1];
-    uint32_t start;
-    uint32_t end;
-    uint32_t chunk_end;
-    uint32_t i;
-    uint32_t n;
-
-    if (text == NULL)
-    {
-        return;
-    }
-
-    start = 0;
-    while (text[start] != '\0')
-    {
-        end = start;
-        while ((text[end] != '\0') && (text[end] != '\n') && (text[end] != '\r'))
-        {
-            end++;
-        }
-
-        if (end == start)
-        {
-            printf("\n\r");
-        }
-        else
-        {
-            i = start;
-            while (i < end)
-            {
-                chunk_end = i + SNF_CLI_PRINTF_CHUNK_SIZE;
-                if (chunk_end > end)
-                {
-                    chunk_end = end;
-                }
-
-                n = chunk_end - i;
-                memcpy(chunk, &text[i], n);
-                chunk[n] = '\0';
-                printf("%s", chunk);
-                i = chunk_end;
-            }
-        }
-
-        if ((text[end] == '\r') || (text[end] == '\n'))
-        {
-            if (end != start)
-            {
-                printf("\n\r");
-            }
-
-            while ((text[end] == '\r') || (text[end] == '\n'))
-            {
-                end++;
-            }
-        }
-
-        start = end;
-    }
-}
-
-/**
  * @brief 处理任务列表查询串口命令.
  *
  * @param [in] argc - 参数数量, argv[0]为task.
@@ -486,7 +415,7 @@ static void taskCliCommand(int argc, char **argv)
     printf("\n\rtask info:");
     printf("\n\rname            | status | prio | stack | id | tcb");
     vTaskList(task_list_buf);
-    printLines(task_list_buf);
+    printf("%s", task_list_buf);
     vPortFree(task_list_buf);
 }
 
@@ -639,9 +568,7 @@ static void atPrintError(const char *cmd)
  */
 static void atPrintValue(const char *cmd, const char *value)
 {
-    printf("%s=", cmd);
-    printLines(value);
-    printf("\r\n");
+    printf("%s=%s\r\n", cmd, value);
 }
 
 /**
@@ -982,9 +909,7 @@ static void atLicenseWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int 
     printf("%s=OK\r\n", AT_CMD_LICENSE_WRITE);
     for (i = 0; i < 3; i++)
     {
-        printf("SHA256=");
-        printLines(reply_sha256);
-        printf("\r\n");
+        printf("SHA256=%s\r\n", reply_sha256);
     }
 }
 
@@ -1018,9 +943,7 @@ static void atLicenseReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int a
         return;
     }
 
-    printf("%s=%s,%s,", AT_CMD_LICENSE_READ, uiid, device_model);
-    printLines(sha256);
-    printf("\r\n");
+    printf("%s=%s,%s,%s\r\n", AT_CMD_LICENSE_READ, uiid, device_model, sha256);
 }
 
 /**
@@ -1541,10 +1464,8 @@ static void atMtCdReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc
     }
 
     printf("%s=%u\r\n", AT_CMD_MT_CD_READ, (unsigned int)data_len);
-    printLines(base64);
-    printf("\r\nSHA256=");
-    printLines(sha256);
-    printf("\r\n");
+    printf("%s\r\n", base64);
+    printf("SHA256=%s\r\n", sha256);
 }
 
 /**
