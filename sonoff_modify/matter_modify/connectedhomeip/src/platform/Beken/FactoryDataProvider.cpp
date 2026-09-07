@@ -141,6 +141,13 @@ CHIP_ERROR FactoryDataProvider::ReadFlashDataHeader()
 CHIP_ERROR FactoryDataProvider::GetCertificationDeclaration(MutableByteSpan & outBuffer)
 {
     /* sonoff modify start */
+    uint8_t cd[NVDM_MATTER_CD_BIN_MAX_LEN];
+    uint16_t cd_len = 0;
+
+    VerifyOrReturnError(0 == snfMatterCdGet(cd, sizeof(cd), &cd_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(outBuffer.size() >= cd_len, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(outBuffer.data(), cd, cd_len);
+    outBuffer.reduce_size(cd_len);
     #if 0
     ReturnErrorOnFailure(ReadCertDataHeader());
     VerifyOrReturnError(outBuffer.size() >= mCertDataHeader.CertificationDeclaration.length, CHIP_ERROR_BUFFER_TOO_SMALL);

@@ -66,6 +66,9 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_LICENSE_READ              "AT+LICENSE_READ"
 #define AT_CMD_LICENSE_READ_QUERY        "AT+LICENSE_READ?"
 #define AT_CMD_LICENSE_DELETE            "AT+LICENSE_DELETE"
+#define AT_CMD_MT_CD_WRITE               "AT+MT_CD_WRITE"
+#define AT_CMD_MT_CD_READ                "AT+MT_CD_READ"
+#define AT_CMD_MT_CD_DELETE              "AT+MT_CD_DELETE"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
@@ -1464,6 +1467,115 @@ static void atMtFactoryDataReadCommand(char *pcWriteBuffer, int xWriteBufferLen,
 }
 
 /**
+ * @brief 处理AT+MT_CD_WRITE写入命令.
+ *
+ * 平台CLI会把Base64里的填充'='切开, 这里按切开前的缓冲把分隔符还原.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char *base64;
+    char *sha256;
+    char *p;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 4) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[argc - 1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_WRITE);
+        return;
+    }
+
+    sha256 = argv[argc - 1];
+    base64 = argv[2];
+    for (p = base64; p < (sha256 - 1); p++)
+    {
+        if (*p == '\0')
+        {
+            *p = '=';
+        }
+    }
+
+    if (snfMatterCdWrite(argv[1], base64, sha256) != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_WRITE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_CD_WRITE, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_CD_READ读取命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char base64[NVDM_MATTER_CD_B64_MAX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    uint16_t data_len;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_READ);
+        return;
+    }
+
+    if (snfMatterCdRead(&data_len, base64, sizeof(base64), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_READ);
+        return;
+    }
+
+    printf("%s=%u\r\n", AT_CMD_MT_CD_READ, (unsigned int)data_len);
+    printLines(base64);
+    printf("\r\nSHA256=");
+    printLines(sha256);
+    printf("\r\n");
+}
+
+/**
+ * @brief 处理AT+MT_CD_DELETE删除命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_DELETE);
+        return;
+    }
+
+    if (snfMatterCdClear() != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_CD_DELETE, "OK");
+}
+
+/**
  * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
  */
 static const struct cli_command snfAtCliCommands[] = {
@@ -1473,6 +1585,9 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
     {AT_CMD_MT_FACTORY_DATA_WRITE, "write matter factory data", atMtFactoryDataWriteCommand},
     {AT_CMD_MT_FACTORY_DATA_READ, "read matter factory data", atMtFactoryDataReadCommand},
+    {AT_CMD_MT_CD_WRITE, "write matter certification declaration", atMtCdWriteCommand},
+    {AT_CMD_MT_CD_READ, "read matter certification declaration", atMtCdReadCommand},
+    {AT_CMD_MT_CD_DELETE, "delete matter certification declaration", atMtCdDeleteCommand},
     {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
     {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
     {AT_CMD_LICENSE_WRITE, "write factory license json", atLicenseWriteCommand},

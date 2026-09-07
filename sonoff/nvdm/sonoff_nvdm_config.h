@@ -59,6 +59,8 @@ extern "C" {
 #define NVDM_MATTER_NAME_MAX_LEN                32      /* 厂商名称与产品名称最大长度 */
 #define NVDM_MATTER_SALT_STR_MAX_LEN            44      /* Salt的Base64字符串最大长度 */
 #define NVDM_MATTER_VERIFIER_STR_MAX_LEN        132     /* Verifier的Base64字符串最大长度 */
+#define NVDM_MATTER_CD_BIN_MAX_LEN              512     /* CD二进制最大长度 */
+#define NVDM_MATTER_CD_B64_MAX_LEN              512     /* CD Base64最大长度 */
 
 /**
  * @brief 读取产品识别码.
@@ -355,6 +357,52 @@ int snfMatterPasscodeGet(uint32_t *passcode);
  * @return 0表示写入成功, 负数表示参数非法或写入失败.
  */
 int snfMatterPasscodeSet(const char *passcode);
+
+/**
+ * @brief 写入Matter CD.
+ *
+ * <len>为Base64文本长度. SHA256只对解码后的二进制CD计算. NVDM存储Base64文本.
+ *
+ * @param [in] data_len - Base64文本长度的十进制字符串.
+ * @param [in] base64 - CD的Base64字符串.
+ * @param [in] sha256_hex - 二进制CD的64位十六进制SHA256.
+ * @return 0表示写入成功, 负数表示参数非法、校验失败或写入失败.
+ */
+int snfMatterCdWrite(const char *data_len, const char *base64, const char *sha256_hex);
+
+/**
+ * @brief 读取Matter CD.
+ *
+ * 未写入或数据非法时失败.
+ *
+ * @param [out] data_len - Base64文本长度.
+ * @param [out] base64 - Base64缓冲区.
+ * @param [in] base64_size - 缓冲区长度, 需大于NVDM_MATTER_CD_B64_MAX_LEN.
+ * @param [out] sha256_hex - 二进制CD的SHA256缓冲区, 小写64位十六进制.
+ * @param [in] sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return 0表示读取成功, 负数表示未写入或读取失败.
+ */
+int snfMatterCdRead(uint16_t *data_len, char *base64, uint16_t base64_size,
+                    char *sha256_hex, uint16_t sha256_size);
+
+/**
+ * @brief 清空Matter CD.
+ *
+ * 原本未写入时仍写成空值.
+ *
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfMatterCdClear(void);
+
+/**
+ * @brief 读取Matter CD二进制.
+ *
+ * @param [out] cd - 二进制缓冲区.
+ * @param [in] cd_size - 缓冲区长度.
+ * @param [out] cd_len - 实际二进制长度.
+ * @return 0表示读取成功, 负数表示未写入或读取失败.
+ */
+int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len);
 
 #ifdef __cplusplus
 }

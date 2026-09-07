@@ -423,6 +423,45 @@ static int sha256DigestToHex(const uint8_t *digest, char *hex, uint16_t hex_size
 }
 
 /**
+ * @brief 计算二进制数据的SHA256摘要.
+ *
+ * @param [in] data - 待计算数据.
+ * @param [in] data_len - 数据长度.
+ * @param [out] digest - 32字节摘要缓冲区.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int sha256Bytes(const uint8_t *data, uint32_t data_len, uint8_t *digest)
+{
+    SnfSha256Ctx ctx;
+    int ret;
+
+    if ((data == NULL) || (digest == NULL))
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Update(&ctx, data, data_len);
+    if (ret != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    if (snfSha256Finish(&ctx, digest, SNF_SHA256_DIGEST_SIZE) != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
  * @brief 按字段顺序拼接并计算SHA256小写十六进制.
  *
  * @param [in] parts - 字段值数组.
@@ -716,6 +755,39 @@ static int matterItemSet(const char *key, const char *value)
     if (ret != 0)
     {
         LOG_E(tag, "matter item %s write failed", key);
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 将CD的Base64解码为二进制.
+ *
+ * @param [in] base64 - CD的Base64字符串.
+ * @param [out] cd - 二进制缓冲区.
+ * @param [in] cd_size - 缓冲区长度.
+ * @param [out] cd_len - 解码后的二进制长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int matterCdDecode(const char *base64, uint8_t *cd, uint16_t cd_size, uint32_t *cd_len)
+{
+    int ret;
+
+    if ((base64 == NULL) || (base64[0] == '\0') || (cd == NULL)
+        || (cd_size == 0) || (cd_len == NULL))
+    {
+        return -1;
+    }
+
+    *cd_len = 0;
+    ret = snfBase64Decode(cd,
+                          (uint32_t)cd_size,
+                          cd_len,
+                          (const uint8_t *)base64,
+                          (uint32_t)strlen(base64));
+    if ((ret != SNF_BASE64_OK) || (*cd_len == 0) || (*cd_len > (uint32_t)cd_size))
+    {
         return -1;
     }
 
@@ -1591,4 +1663,122 @@ int snfMatterPasscodeSet(const char *passcode)
     }
 
     return matterItemSet(NVDM_MATTER_ITEM_PASSCODE, passcode);
+}
+
+int snfMatterCdWrite(const char *data_len, const char *base64, const char *sha256_hex)
+{
+    uint8_t cd[NVDM_MATTER_CD_BIN_MAX_LEN];
+    uint8_t expected[SNF_SHA256_DIGEST_SIZE];
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint32_t expect_len;
+    uint32_t cd_len;
+    uint32_t base64_len;
+
+    if ((data_len == NULL) || (base64 == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (parseDecU32(data_len, &expect_len) == 0)
+    {
+        return -1;
+    }
+
+    base64_len = (uint32_t)strlen(base64);
+    if ((expect_len == 0) || (base64_len != expect_len) || (base64_len > NVDM_MATTER_CD_B64_MAX_LEN))
+    {
+        LOG_E(tag, "cd write len mismatch, expect=%u actual=%u", expect_len, base64_len);
+        return -1;
+    }
+
+    if (hexBytesDecode(sha256_hex, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    if (matterCdDecode(base64, cd, sizeof(cd), &cd_len) != 0)
+    {
+        LOG_E(tag, "cd write base64 decode failed");
+        return -1;
+    }
+
+    if (sha256Bytes(cd, cd_len, digest) != 0)
+    {
+        return -1;
+    }
+
+    if (memcmp(digest, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        LOG_E(tag, "cd write sha256 mismatch");
+        return -1;
+    }
+
+    return matterItemSet(NVDM_MATTER_ITEM_CD, base64);
+}
+
+int snfMatterCdRead(uint16_t *data_len, char *base64, uint16_t base64_size,
+                    char *sha256_hex, uint16_t sha256_size)
+{
+    uint8_t cd[NVDM_MATTER_CD_BIN_MAX_LEN];
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint32_t cd_len;
+
+    if ((data_len == NULL) || (base64 == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (matterItemGet(NVDM_MATTER_ITEM_CD, base64, base64_size, NVDM_MATTER_CD_B64_MAX_LEN) != 0)
+    {
+        return -1;
+    }
+
+    if (matterCdDecode(base64, cd, sizeof(cd), &cd_len) != 0)
+    {
+        return -1;
+    }
+
+    if (sha256Bytes(cd, cd_len, digest) != 0)
+    {
+        return -1;
+    }
+
+    if (sha256DigestToHex(digest, sha256_hex, sha256_size) != 0)
+    {
+        return -1;
+    }
+
+    *data_len = (uint16_t)strlen(base64);
+
+    return 0;
+}
+
+int snfMatterCdClear(void)
+{
+    return matterItemSet(NVDM_MATTER_ITEM_CD, "");
+}
+
+int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len)
+{
+    char base64[NVDM_MATTER_CD_B64_MAX_LEN + 1];
+    uint32_t decoded_len;
+
+    if ((cd == NULL) || (cd_len == NULL))
+    {
+        return -1;
+    }
+
+    if (matterItemGet(NVDM_MATTER_ITEM_CD, base64, sizeof(base64), NVDM_MATTER_CD_B64_MAX_LEN) != 0)
+    {
+        return -1;
+    }
+
+    if (matterCdDecode(base64, cd, cd_size, &decoded_len) != 0)
+    {
+        return -1;
+    }
+
+    *cd_len = (uint16_t)decoded_len;
+
+    return 0;
 }

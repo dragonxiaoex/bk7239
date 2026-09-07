@@ -6,7 +6,7 @@ BK 工厂分区分两段：`+0KB` 证书区、`+4KB` 设备信息区。设备信
 
 | Matter 接口 | BK Flash 字段 | 编码 | 说明 |
 |---|---|---|---|
-| `GetCertificationDeclaration` | `CertificationDeclaration` | 二进制 CD | 当前空实现，直接返回成功 |
+| `GetCertificationDeclaration` | `CertificationDeclaration` | 二进制 CD | 从 NVDM `matter.CD` 读 Base64 并解码 |
 | `GetDeviceAttestationCert` | `DeviceAttestationCert` | 二进制 DAC | 仍读 `BK_PARTITION_MATTER_FACTORY` |
 | `GetProductAttestationIntermediateCert` | `ProductAttestationIntermediateCert` | 二进制 PAI | 仍读 BK Flash |
 | `SignWithDeviceAttestationKey` | `DacPublicKey` + `DacPrivateKey` | 原始密钥 | 用 DAC 私钥对消息做 ECDSA 签名 |
