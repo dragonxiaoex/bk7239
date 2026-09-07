@@ -130,6 +130,13 @@ int snfMainInit(void)
         return -1;
     }
 
+    ret = snfBaseMacApply();
+    if (ret != 0)
+    {
+        LOG_E(tag, "base mac apply failed, ret=%d", ret);
+        return -1;
+    }
+
     ret = snfCliInit();
     if (ret != 0)
     {

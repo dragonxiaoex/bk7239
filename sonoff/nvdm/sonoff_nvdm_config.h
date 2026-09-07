@@ -47,6 +47,12 @@ extern "C" {
 /** @brief 授权码十六进制字符串长度. */
 #define NVDM_FACTORY_ACTIVE_CODE_HEX_LEN    32
 
+/** @brief BASE MAC二进制长度. */
+#define NVDM_FACTORY_BASE_MAC_LEN           6
+
+/** @brief BASE MAC字符串长度, 格式为AA:BB:CC:DD:EE:FF. */
+#define NVDM_FACTORY_BASE_MAC_STR_LEN       17
+
 /** @brief 鉴别器最大值, 12-bit. */
 #define NVDM_MATTER_DISCRIMINATOR_MAX       4095
 
@@ -115,6 +121,35 @@ int snfActiveCodeSet(const char *active_code);
  * @return 0表示已授权, 负数表示未授权或校验失败.
  */
 int snfActiveCodeIsAuthorized(void);
+
+/**
+ * @brief 读取自定义BASE MAC.
+ *
+ * @param [out] base_mac - MAC缓冲区, 需能容纳AA:BB:CC:DD:EE:FF和结束符.
+ * @param [in] base_mac_size - 缓冲区长度.
+ * @return 0表示读取成功, 负数表示未设置或读取失败.
+ */
+int snfBaseMacGet(char *base_mac, uint16_t base_mac_size);
+
+/**
+ * @brief 写入自定义BASE MAC.
+ *
+ * 格式为AA:BB:CC:DD:EE:FF, 拒绝全0和组播地址. 写入后同步到SDK RAM, 不写OTP和RF Flash.
+ * STA等于BASE, AP由SDK从BASE派生.
+ *
+ * @param [in] base_mac - MAC字符串, 格式为AA:BB:CC:DD:EE:FF.
+ * @return 0表示写入成功, 负数表示参数非法或写入失败.
+ */
+int snfBaseMacSet(const char *base_mac);
+
+/**
+ * @brief 将NVDM中的自定义BASE MAC应用到SDK RAM.
+ *
+ * 未设置或为空时不覆盖SDK MAC. 只改内存, 不写OTP和RF Flash.
+ *
+ * @return 0表示成功或无需覆盖, 负数表示应用失败.
+ */
+int snfBaseMacApply(void);
 
 /**
  * @brief 读取Matter鉴别器.
