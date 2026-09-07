@@ -10,6 +10,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <FreeRTOS.h>
@@ -61,9 +62,11 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_MT_FACTORY_DATA_READ      "AT+MT_FACTORY_DATA_READ"
 #define AT_CMD_ACTIVE_CODE               "AT+ACTIVE_CODE"
 #define AT_CMD_ACTIVE_CODE_QUERY         "AT+ACTIVE_CODE?"
+#define AT_CMD_LICENSE_WRITE             "AT+LICENSE_WRITE"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
+#define AT_LICENSE_JSON_MAX_LEN          512
 
 /**
  * @brief Sonoff工具箱子命令处理函数.
@@ -636,6 +639,18 @@ static void atPrintValue(const char *cmd, const char *value)
 }
 
 /**
+ * @brief 打印License写入错误响应.
+ *
+ * @param [in] ident - 错误标识.
+ * @param [in] reason - 错误原因.
+ */
+static void atPrintLicenseError(const char *ident, const char *reason)
+{
+    printf("%s=ERROR\r\n", AT_CMD_LICENSE_WRITE);
+    printf("%s:%s\r\n", ident, reason);
+}
+
+/**
  * @brief 读取主芯片唯一标识.
  *
  * @param [out] uid - 唯一标识缓冲区.
@@ -858,6 +873,113 @@ static void atActiveCodeQueryCommand(char *pcWriteBuffer, int xWriteBufferLen, i
     }
 
     atPrintValue(AT_CMD_ACTIVE_CODE, "OK");
+}
+
+/**
+ * @brief 处理AT+LICENSE_WRITE写入命令.
+ *
+ * 平台CLI会把JSON里的逗号和键名引号切开, 这里按切开前的缓冲把分隔符还原.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char reply_sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char *json;
+    char *end;
+    unsigned long frame_len;
+    uint16_t i;
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 3) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL))
+    {
+        atPrintLicenseError("FAILED OPERATE", "NON LICENSE FRAME");
+        return;
+    }
+
+    frame_len = strtoul(argv[1], &end, 10);
+    if ((end == argv[1]) || (*end != '\0') || (frame_len == 0)
+        || (frame_len > AT_LICENSE_JSON_MAX_LEN))
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    for (i = 2; i < (uint16_t)(argc - 1); i++)
+    {
+        if (*(argv[i + 1] - 1) == '"')
+        {
+            argv[i][strlen(argv[i])] = ',';
+        }
+        else
+        {
+            argv[i][strlen(argv[i])] = '"';
+        }
+    }
+
+    json = argv[2];
+    if (strlen(json) != frame_len)
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    if (snfLicenseIsBurned() == 0)
+    {
+        atPrintLicenseError("FAILED OPERATE", "LICENSE ALREADY");
+        return;
+    }
+
+    if (snfLicenseClear() != 0)
+    {
+        atPrintLicenseError("HARDWARE FAILED", "STORAGE HARDWARE");
+        return;
+    }
+
+    ret = snfLicenseWrite(json, reply_sha256, sizeof(reply_sha256));
+    if (ret == SNF_LICENSE_ERR_FRAME_LEN)
+    {
+        atPrintLicenseError("FAILED PARAM", "FRAMER LEN MISMATCHING");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_SHA256)
+    {
+        atPrintLicenseError("FAILED PARAM", "FRAMER SHA256 CHECK MISMATCHING");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_RULES)
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_MODEL)
+    {
+        atPrintLicenseError("FAILED PARAM", "DEVICE MODEL MISMATCHING");
+        return;
+    }
+
+    if (ret != SNF_LICENSE_OK)
+    {
+        atPrintLicenseError("HARDWARE FAILED", "STORAGE HARDWARE");
+        return;
+    }
+
+    printf("%s=OK\r\n", AT_CMD_LICENSE_WRITE);
+    for (i = 0; i < 3; i++)
+    {
+        printf("SHA256=");
+        printLines(reply_sha256);
+        printf("\r\n");
+    }
 }
 
 /**
@@ -1287,6 +1409,7 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_MT_FACTORY_DATA_READ, "read matter factory data", atMtFactoryDataReadCommand},
     {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
     {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
+    {AT_CMD_LICENSE_WRITE, "write factory license json", atLicenseWriteCommand},
 };
 
 #define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))

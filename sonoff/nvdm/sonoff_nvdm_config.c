@@ -9,17 +9,21 @@
  *
  */
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <components/system.h>
 
+#include "cJSON.h"
 #include "mbedtls/aes.h"
 
 #include "sonoff_base64.h"
 #include "sonoff_log.h"
 #include "sonoff_nvdm.h"
-
 #include "sonoff_nvdm_config.h"
+#include "sonoff_project_config.h"
+#include "sonoff_sha256.h"
 
 static const char *tag = "SNF-NVDM-CFG";
 
@@ -302,6 +306,175 @@ static int baseMacParse(const char *str, uint8_t *mac)
     }
 
     return 0;
+}
+
+/**
+ * @brief 检查factory.apikey是否为UUID格式.
+ *
+ * @param [in] apikey - API密钥.
+ * @return 1表示格式合法, 0表示非法.
+ */
+static int factoryApikeyIsValid(const char *apikey)
+{
+    uint16_t i;
+    uint8_t nibble;
+
+    if ((apikey == NULL) || (strlen(apikey) != NVDM_FACTORY_APIKEY_LEN))
+    {
+        return 0;
+    }
+
+    for (i = 0; i < NVDM_FACTORY_APIKEY_LEN; i++)
+    {
+        if ((i == 8) || (i == 13) || (i == 18) || (i == 23))
+        {
+            if (apikey[i] != '-')
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            if (hexNibble(apikey[i], &nibble) == 0)
+            {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+/**
+ * @brief 写入工厂组字符串配置项.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [in] value - 配置值.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int factoryStrWrite(const char *key, const char *value)
+{
+    int len;
+
+    if ((key == NULL) || (value == NULL))
+    {
+        return -1;
+    }
+
+    len = (int)strlen(value) + 1;
+    if (snfNvdmWriteStr(NVDM_FAC_GROUP, key, (const uint8_t *)value, len) != 0)
+    {
+        LOG_E(tag, "factory item %s write failed", key);
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 读取工厂组字符串配置项.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [out] buff - 读取缓冲区.
+ * @param [in] buff_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int factoryStrRead(const char *key, char *buff, uint16_t buff_size)
+{
+    if ((key == NULL) || (buff == NULL) || (buff_size == 0))
+    {
+        return -1;
+    }
+
+    memset(buff, 0, buff_size);
+    if (snfNvdmReadStr(NVDM_FAC_GROUP, key, (uint8_t *)buff, (int)buff_size) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 将SHA256摘要编码为小写十六进制.
+ *
+ * @param [in] digest - 32字节摘要.
+ * @param [out] hex - 十六进制输出缓冲区.
+ * @param [in] hex_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int sha256DigestToHex(const uint8_t *digest, char *hex, uint16_t hex_size)
+{
+    uint16_t i;
+
+    if ((digest == NULL) || (hex == NULL) || (hex_size <= NVDM_FACTORY_SHA256_HEX_LEN))
+    {
+        return -1;
+    }
+
+    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02x", (unsigned int)digest[i]);
+    }
+
+    hex[NVDM_FACTORY_SHA256_HEX_LEN] = '\0';
+
+    return 0;
+}
+
+/**
+ * @brief 按字段顺序拼接并计算SHA256小写十六进制.
+ *
+ * @param [in] parts - 字段值数组.
+ * @param [in] part_num - 字段数量.
+ * @param [out] hex - 64位十六进制输出.
+ * @param [in] hex_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int licenseSha256Hex(const char * const *parts,
+                            uint16_t part_num,
+                            char *hex,
+                            uint16_t hex_size)
+{
+    SnfSha256Ctx ctx;
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint16_t i;
+    int ret;
+
+    if ((parts == NULL) || (part_num == 0) || (hex == NULL))
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    for (i = 0; i < part_num; i++)
+    {
+        if (parts[i] == NULL)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+
+        ret = snfSha256Update(&ctx, (const uint8_t *)parts[i], (uint32_t)strlen(parts[i]));
+        if (ret != SNF_SHA256_OK)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+    }
+
+    ret = snfSha256Finish(&ctx, digest, sizeof(digest));
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    return sha256DigestToHex(digest, hex, hex_size);
 }
 
 /**
@@ -812,6 +985,300 @@ int snfBaseMacApply(void)
     }
 
     return 0;
+}
+
+int snfLicenseIsBurned(void)
+{
+    char device_id[NVDM_FACTORY_DEVICE_ID_LEN + 1];
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_ID, device_id, sizeof(device_id)) != 0)
+    {
+        return -1;
+    }
+
+    if (device_id[0] == '\0')
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+int snfLicenseClear(void)
+{
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_ID, "") != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_FACTORY_APIKEY, "") != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_BASE_MAC, "") != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_MODEL, "") != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_UIID, "") != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+int snfLicenseWrite(const char *json, char *reply_sha256, uint16_t reply_sha256_size)
+{
+    cJSON *root;
+    cJSON *frame;
+    cJSON *item;
+    char *frame_text;
+    const char *device_id;
+    const char *apikey;
+    const char *base_mac;
+    const char *device_model;
+    const char *c1_parts[5];
+    const char *c5_parts[5];
+    const char *read_parts[5];
+    char uiid_str[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    char c1_hex[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char read_hex[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char read_device_id[NVDM_FACTORY_DEVICE_ID_LEN + 1];
+    char read_apikey[NVDM_FACTORY_APIKEY_LEN + 1];
+    char read_mac[NVDM_FACTORY_BASE_MAC_STR_LEN + 1];
+    char read_model[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char read_uiid[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    uint8_t mac[NVDM_FACTORY_BASE_MAC_LEN];
+    uint8_t expect_digest[SNF_SHA256_DIGEST_SIZE];
+    uint8_t input_digest[SNF_SHA256_DIGEST_SIZE];
+    int ret;
+
+    if ((json == NULL) || (json[0] == '\0')
+        || (reply_sha256 == NULL) || (reply_sha256_size <= NVDM_FACTORY_SHA256_HEX_LEN))
+    {
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    root = cJSON_Parse(json);
+    if (root == NULL)
+    {
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    frame = cJSON_GetObjectItem(root, "license_frame");
+    item = cJSON_GetObjectItem(root, "license_frame_len");
+    if ((frame == NULL) || (frame->type != cJSON_Object) || (item == NULL)
+        || (item->type != cJSON_Number))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    frame_text = cJSON_PrintUnformatted(frame);
+    if (frame_text == NULL)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    if (item->valueint != (int)strlen(frame_text))
+    {
+        free(frame_text);
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_FRAME_LEN;
+    }
+
+    free(frame_text);
+
+    item = cJSON_GetObjectItem(frame, "deviceid");
+    if ((item == NULL) || (item->type != cJSON_String) || (item->valuestring == NULL)
+        || (strlen(item->valuestring) != NVDM_FACTORY_DEVICE_ID_LEN))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    device_id = item->valuestring;
+
+    item = cJSON_GetObjectItem(frame, "factory_apikey");
+    if ((item == NULL) || (item->type != cJSON_String)
+        || (factoryApikeyIsValid(item->valuestring) == 0))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    apikey = item->valuestring;
+
+    item = cJSON_GetObjectItem(frame, "base_mac");
+    if ((item == NULL) || (item->type != cJSON_String)
+        || (baseMacParse(item->valuestring, mac) != 0))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    base_mac = item->valuestring;
+
+    item = cJSON_GetObjectItem(frame, "device_model");
+    if ((item == NULL) || (item->type != cJSON_String) || (item->valuestring == NULL)
+        || (item->valuestring[0] == '\0'))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    device_model = item->valuestring;
+
+    item = cJSON_GetObjectItem(frame, "uiid");
+    if ((item == NULL) || (item->type != cJSON_Number) || (item->valueint < 0))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    ret = snprintf(uiid_str, sizeof(uiid_str), "%d", item->valueint);
+    if ((ret <= 0) || (ret >= (int)sizeof(uiid_str)))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    item = cJSON_GetObjectItem(root, "sha256_check");
+    if ((item == NULL) || (item->type != cJSON_String)
+        || (hexBytesDecode(item->valuestring, input_digest, SNF_SHA256_DIGEST_SIZE) != 0))
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_RULES;
+    }
+
+    c1_parts[0] = apikey;
+    c1_parts[1] = base_mac;
+    c1_parts[2] = device_model;
+    c1_parts[3] = uiid_str;
+    c1_parts[4] = device_id;
+    if (licenseSha256Hex(c1_parts, 5, c1_hex, sizeof(c1_hex)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (hexBytesDecode(c1_hex, expect_digest, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (memcmp(input_digest, expect_digest, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_SHA256;
+    }
+
+    if (strcmp(device_model, SONOFF_DEVICE_MODEL) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_MODEL;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_ID, device_id) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_FACTORY_APIKEY, apikey) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_BASE_MAC, base_mac) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_MODEL, device_model) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrWrite(NVDM_FACTORY_ITEM_DEVICE_UIID, uiid_str) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_ID, read_device_id, sizeof(read_device_id)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_FACTORY_APIKEY, read_apikey, sizeof(read_apikey)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_BASE_MAC, read_mac, sizeof(read_mac)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_MODEL, read_model, sizeof(read_model)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_UIID, read_uiid, sizeof(read_uiid)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    read_parts[0] = read_apikey;
+    read_parts[1] = read_mac;
+    read_parts[2] = read_model;
+    read_parts[3] = read_uiid;
+    read_parts[4] = read_device_id;
+    if (licenseSha256Hex(read_parts, 5, read_hex, sizeof(read_hex)) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    if (strcmp(c1_hex, read_hex) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_SHA256;
+    }
+
+    c5_parts[0] = device_id;
+    c5_parts[1] = apikey;
+    c5_parts[2] = base_mac;
+    c5_parts[3] = device_model;
+    c5_parts[4] = uiid_str;
+    if (licenseSha256Hex(c5_parts, 5, reply_sha256, reply_sha256_size) != 0)
+    {
+        cJSON_Delete(root);
+        return SNF_LICENSE_ERR_STORAGE;
+    }
+
+    cJSON_Delete(root);
+
+    return SNF_LICENSE_OK;
 }
 
 int snfMatterDiscriminatorGet(uint16_t *discriminator)

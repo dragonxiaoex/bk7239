@@ -56,7 +56,7 @@ static const SnfNvdmItem nvdm_factory_item_array[] = {
     NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_FACTORY_APIKEY, ""),
     NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_BASE_MAC, "00:00:00:00:00:00"),
     NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_MODEL, ""),
-    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_UUID, ""),
+    NVDM_FAC_ITEM(NVDM_FACTORY_ITEM_DEVICE_UIID, ""),
 };
 
 static const SnfNvdmItem nvdm_matter_item_array[] = {

@@ -35,47 +35,29 @@ extern "C" {
 #define NVDM_FACTORY_ITEM_DEVICE_ID         "device.id"
 #define NVDM_FACTORY_ITEM_FACTORY_APIKEY    "factory.apikey"
 #define NVDM_FACTORY_ITEM_DEVICE_MODEL      "device.model"
-#define NVDM_FACTORY_ITEM_DEVICE_UUID       "device.uuid"
+#define NVDM_FACTORY_ITEM_DEVICE_UIID       "device.uiid"
 #define NVDM_FACTORY_ITEM_BASE_MAC          "base.mac"
 
-/** @brief 产品识别码十进制数字长度. */
-#define NVDM_FACTORY_SERIAL_NUMBER_LEN      14
+/** @brief 工厂配置项长度. */
+#define NVDM_FACTORY_SERIAL_NUMBER_LEN      14      /* 产品识别码十进制数字长度 */
+#define NVDM_FACTORY_ACTIVE_CODE_LEN        16      /* 授权码二进制长度 */
+#define NVDM_FACTORY_ACTIVE_CODE_HEX_LEN    32      /* 授权码十六进制字符串长度 */
+#define NVDM_FACTORY_BASE_MAC_LEN           6       /* BASE MAC二进制长度 */
+#define NVDM_FACTORY_BASE_MAC_STR_LEN       17      /* BASE MAC字符串, AA:BB:CC:DD:EE:FF */
+#define NVDM_FACTORY_DEVICE_ID_LEN          10      /* 设备ID字符串长度 */
+#define NVDM_FACTORY_APIKEY_LEN             36      /* factory.apikey字符串长度 */
+#define NVDM_FACTORY_UIID_STR_MAX_LEN       10      /* uiid十进制字符串最大长度 */
+#define NVDM_FACTORY_SHA256_HEX_LEN         64      /* License SHA256十六进制字符串长度 */
 
-/** @brief 授权码二进制长度. */
-#define NVDM_FACTORY_ACTIVE_CODE_LEN        16
-
-/** @brief 授权码十六进制字符串长度. */
-#define NVDM_FACTORY_ACTIVE_CODE_HEX_LEN    32
-
-/** @brief BASE MAC二进制长度. */
-#define NVDM_FACTORY_BASE_MAC_LEN           6
-
-/** @brief BASE MAC字符串长度, 格式为AA:BB:CC:DD:EE:FF. */
-#define NVDM_FACTORY_BASE_MAC_STR_LEN       17
-
-/** @brief 鉴别器最大值, 12-bit. */
-#define NVDM_MATTER_DISCRIMINATOR_MAX       4095
-
-/** @brief 鉴别器十进制字符串最大长度. */
-#define NVDM_MATTER_DISCRIMINATOR_STR_MAX_LEN   4
-
-/** @brief 无符号32位十进制字符串最大长度. */
-#define NVDM_MATTER_DEC_U32_STR_MAX_LEN     10
-
-/** @brief 厂商ID与产品ID十六进制字符串最大长度. */
-#define NVDM_MATTER_HEX_ID_MAX_LEN          4
-
-/** @brief Rotating ID唯一编号十六进制字符长度. */
-#define NVDM_MATTER_RD_ID_UID_HEX_LEN       32
-
-/** @brief 厂商名称与产品名称最大长度. */
-#define NVDM_MATTER_NAME_MAX_LEN            32
-
-/** @brief Salt的Base64字符串最大长度. */
-#define NVDM_MATTER_SALT_STR_MAX_LEN        44
-
-/** @brief Verifier的Base64字符串最大长度. */
-#define NVDM_MATTER_VERIFIER_STR_MAX_LEN    132
+/** @brief Matter配置项长度与范围. */
+#define NVDM_MATTER_DISCRIMINATOR_MAX           4095    /* 鉴别器最大值, 12-bit */
+#define NVDM_MATTER_DISCRIMINATOR_STR_MAX_LEN   4       /* 鉴别器十进制字符串最大长度 */
+#define NVDM_MATTER_DEC_U32_STR_MAX_LEN         10      /* 无符号32位十进制字符串最大长度 */
+#define NVDM_MATTER_HEX_ID_MAX_LEN              4       /* 厂商ID与产品ID十六进制最大长度 */
+#define NVDM_MATTER_RD_ID_UID_HEX_LEN           32      /* Rotating ID十六进制字符长度 */
+#define NVDM_MATTER_NAME_MAX_LEN                32      /* 厂商名称与产品名称最大长度 */
+#define NVDM_MATTER_SALT_STR_MAX_LEN            44      /* Salt的Base64字符串最大长度 */
+#define NVDM_MATTER_VERIFIER_STR_MAX_LEN        132     /* Verifier的Base64字符串最大长度 */
 
 /**
  * @brief 读取产品识别码.
@@ -150,6 +132,47 @@ int snfBaseMacSet(const char *base_mac);
  * @return 0表示成功或无需覆盖, 负数表示应用失败.
  */
 int snfBaseMacApply(void);
+
+/**
+ * @brief License写入结果.
+ */
+typedef enum
+{
+    SNF_LICENSE_OK = 0,             /**< 写入成功 */
+    SNF_LICENSE_ERR_FRAME_LEN = -1, /**< license_frame长度不匹配 */
+    SNF_LICENSE_ERR_SHA256 = -2,    /**< SHA256校验失败 */
+    SNF_LICENSE_ERR_RULES = -3,     /**< 字段格式不符合规则 */
+    SNF_LICENSE_ERR_MODEL = -4,     /**< device_model与固件不一致 */
+    SNF_LICENSE_ERR_STORAGE = -5,   /**< 存储失败 */
+} SnfLicenseResult;
+
+/**
+ * @brief 检查设备是否已烧录License.
+ *
+ * device.id非空视为已烧录.
+ *
+ * @return 0表示已烧录, 负数表示未烧录或读取失败.
+ */
+int snfLicenseIsBurned(void);
+
+/**
+ * @brief 清空License相关NVDM项.
+ *
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfLicenseClear(void);
+
+/**
+ * @brief 解析License JSON并写入NVDM.
+ *
+ * 不立即应用BASE MAC, 下次上电由snfBaseMacApply生效.
+ *
+ * @param [in] json - 一行License JSON, 需以结束符结尾.
+ * @param [out] reply_sha256 - C5应答SHA256缓冲区, 小写64位十六进制.
+ * @param [in] reply_sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return SnfLicenseResult.
+ */
+int snfLicenseWrite(const char *json, char *reply_sha256, uint16_t reply_sha256_size);
 
 /**
  * @brief 读取Matter鉴别器.
