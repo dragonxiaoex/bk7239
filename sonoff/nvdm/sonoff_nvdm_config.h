@@ -31,7 +31,7 @@ extern "C" {
 #define NVDM_MATTER_ITEM_CD                 "CD"
 #define NVDM_MATTER_ITEM_DAC_CERT           "DAC.CERT"
 #define NVDM_MATTER_ITEM_DAC_KEY            "DAC.KEY"
-#define NVDM_MATTER_ITEM_PAI_KEY            "PAI.KEY"
+#define NVDM_MATTER_ITEM_PAI_CERT           "PAI.CERT"
 
 /** @brief 工厂配置项键名. */
 #define NVDM_FACTORY_ITEM_SERIAL_NUMBER     "serial.number"
@@ -64,6 +64,19 @@ extern "C" {
 #define NVDM_MATTER_VERIFIER_STR_MAX_LEN        132     /* Verifier的Base64字符串最大长度 */
 #define NVDM_MATTER_CD_BIN_MAX_LEN              512     /* CD二进制最大长度 */
 #define NVDM_MATTER_CD_B64_MAX_LEN              512     /* CD Base64最大长度 */
+#define NVDM_MATTER_DAC_CERT_BIN_MAX_LEN        600     /* DAC证书DER最大长度 */
+#define NVDM_MATTER_DAC_KEY_BIN_LEN             32      /* DAC私钥RAW长度 */
+#define NVDM_MATTER_PAI_CERT_BIN_MAX_LEN        600     /* PAI证书DER最大长度 */
+#define NVDM_MATTER_CERT_B64_MAX_LEN            800     /* DAC/PAI/DAC密钥Base64最大长度 */
+#define NVDM_MATTER_SECURE_CERT_HEADER_LEN      12      /* 安全证书数据头长度 */
+#define NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN \
+    (NVDM_MATTER_SECURE_CERT_HEADER_LEN + NVDM_MATTER_DAC_CERT_BIN_MAX_LEN \
+     + NVDM_MATTER_DAC_KEY_BIN_LEN + NVDM_MATTER_PAI_CERT_BIN_MAX_LEN)
+#define NVDM_MATTER_SECURE_CERT_B64_MAX_LEN \
+    (4 * ((NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN + 2) / 3))
+#define NVDM_MATTER_ECDH_PUB_HEX_LEN            130     /* secp256r1未压缩公钥十六进制长度 */
+#define NVDM_MATTER_AES_GCM_IV_HEX_LEN          24      /* AES-GCM IV十六进制长度 */
+#define NVDM_MATTER_AES_GCM_TAG_HEX_LEN         32      /* AES-GCM TAG十六进制长度 */
 
 /**
  * @brief 读取产品识别码.
@@ -405,7 +418,103 @@ int snfMatterCdClear(void);
  * @param [out] cd_len - 实际二进制长度.
  * @return 0表示读取成功, 负数表示未写入或读取失败.
  */
-int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len);
+int snfMatterCDGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len);
+
+/**
+ * @brief 生成本地临时ECDH公钥.
+ *
+ * 曲线为secp256r1, 公钥不落盘. 重复调用会丢弃上一组本地密钥及已设置的对端参数.
+ *
+ * @param [out] pub_hex - 未压缩公钥的小写十六进制缓冲区.
+ * @param [in] pub_hex_size - 缓冲区长度, 需大于NVDM_MATTER_ECDH_PUB_HEX_LEN.
+ * @param [out] sha256_hex - pub_hex字符串的SHA256缓冲区, 小写64位十六进制.
+ * @param [in] sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfMatterPubKeyGet(char *pub_hex, uint16_t pub_hex_size, char *sha256_hex, uint16_t sha256_size);
+
+/**
+ * @brief 设置服务端ECDH公钥及AES-GCM参数.
+ *
+ * 不落盘. SHA256对`<pub_key hex>,<iv hex>,<tag hex>`计算, 不含末尾逗号.
+ *
+ * @param [in] pub_hex - 服务端未压缩公钥十六进制.
+ * @param [in] iv_hex - 12字节IV的十六进制.
+ * @param [in] tag_hex - 16字节TAG的十六进制.
+ * @param [in] sha256_hex - 上述三字段拼接串的64位十六进制SHA256.
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfMatterPubKeySet(const char *pub_hex, const char *iv_hex, const char *tag_hex,
+                       const char *sha256_hex);
+
+/**
+ * @brief 解密并写入Matter安全证书.
+ *
+ * 须先完成公钥交换. `<len>`为加密数据Base64文本长度, SHA256对该Base64文本计算.
+ * 解密明文为小端数据头加DAC证书、DAC密钥、PAI证书. 写入后临时密钥失效.
+ *
+ * @param [in] data_len - Base64文本长度的十进制字符串.
+ * @param [in] base64 - 加密数据的Base64字符串.
+ * @param [in] sha256_hex - Base64文本的64位十六进制SHA256.
+ * @param [out] reply_sha256 - 解密明文的SHA256缓冲区, 小写64位十六进制.
+ * @param [in] reply_sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfMatterSecureCertWrite(const char *data_len, const char *base64, const char *sha256_hex,
+                             char *reply_sha256, uint16_t reply_sha256_size);
+
+/**
+ * @brief 读取安全证书状态.
+ *
+ * 未写入产品识别码或证书时失败. sha256为数据头加三份证书数据的摘要.
+ *
+ * @param [out] serial_number - 14位产品识别码缓冲区.
+ * @param [in] serial_size - 缓冲区长度, 需大于NVDM_FACTORY_SERIAL_NUMBER_LEN.
+ * @param [out] sha256_hex - 安全证书明文SHA256缓冲区, 小写64位十六进制.
+ * @param [in] sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示未写入或校验失败.
+ */
+int snfMatterSecureCertRead(char *serial_number, uint16_t serial_size,
+                            char *sha256_hex, uint16_t sha256_size);
+
+/**
+ * @brief 清空Matter安全证书.
+ *
+ * 原本未写入时仍写成空值.
+ *
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfMatterSecureCertClear(void);
+
+/**
+ * @brief 读取DAC证书二进制.
+ *
+ * @param [out] dac_cert - 二进制缓冲区.
+ * @param [in] dac_cert_size - 缓冲区长度.
+ * @param [out] dac_cert_len - 实际二进制长度.
+ * @return 0表示读取成功, 负数表示未写入或读取失败.
+ */
+int snfMatterDacCertGet(uint8_t *dac_cert, uint16_t dac_cert_size, uint16_t *dac_cert_len);
+
+/**
+ * @brief 读取DAC私钥二进制.
+ *
+ * @param [out] dac_key - 二进制缓冲区.
+ * @param [in] dac_key_size - 缓冲区长度.
+ * @param [out] dac_key_len - 实际二进制长度.
+ * @return 0表示读取成功, 负数表示未写入或读取失败.
+ */
+int snfMatterDacKeyGet(uint8_t *dac_key, uint16_t dac_key_size, uint16_t *dac_key_len);
+
+/**
+ * @brief 读取PAI证书二进制.
+ *
+ * @param [out] pai_cert - 二进制缓冲区.
+ * @param [in] pai_cert_size - 缓冲区长度.
+ * @param [out] pai_cert_len - 实际二进制长度.
+ * @return 0表示读取成功, 负数表示未写入或读取失败.
+ */
+int snfMatterPaiCertGet(uint8_t *pai_cert, uint16_t pai_cert_size, uint16_t *pai_cert_len);
 
 #ifdef __cplusplus
 }

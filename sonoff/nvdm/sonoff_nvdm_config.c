@@ -17,8 +17,11 @@
 
 #include "cJSON.h"
 #include "mbedtls/aes.h"
+#include "mbedtls/platform_util.h"
 
+#include "sonoff_aes_gcm.h"
 #include "sonoff_base64.h"
+#include "sonoff_ecdh.h"
 #include "sonoff_log.h"
 #include "sonoff_nvdm.h"
 #include "sonoff_nvdm_config.h"
@@ -29,6 +32,29 @@ static const char *tag = "SNF-NVDM-CFG";
 
 #define ACTIVE_CODE_AES_KEY             "soNoFF22soNoFF22"
 #define ACTIVE_CODE_AES_KEYBITS         128
+#define MATTER_ECDH_UNCOMPRESSED_PREFIX 0x04
+
+/**
+ * @brief 安全证书密钥交换会话.
+ */
+typedef struct
+{
+    SnfEcdhCtx ecdh;
+    uint8_t peer_pub[SNF_ECDH_PUBLIC_SIZE];
+    uint8_t iv[SNF_AES_GCM_IV_SIZE];
+    uint8_t tag[SNF_AES_GCM_TAG_SIZE];
+    uint8_t local_ready;
+    uint8_t peer_ready;
+} MatterSecureSession;
+
+static MatterSecureSession matter_secure_session = {
+    .ecdh = {{0}},
+    .peer_pub = {0},
+    .iv = {0},
+    .tag = {0},
+    .local_ready = 0,
+    .peer_ready = 0,
+};
 
 /**
  * @brief 检查产品识别码是否为14位十进制数字.
@@ -396,6 +422,35 @@ static int factoryStrRead(const char *key, char *buff, uint16_t buff_size)
 }
 
 /**
+ * @brief 将二进制编码为小写十六进制.
+ *
+ * @param [in] data - 待编码数据.
+ * @param [in] data_len - 数据长度.
+ * @param [out] hex - 十六进制输出缓冲区.
+ * @param [in] hex_size - 缓冲区长度, 需大于data_len的2倍.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int bytesToHex(const uint8_t *data, uint16_t data_len, char *hex, uint16_t hex_size)
+{
+    uint16_t i;
+
+    if ((data == NULL) || (hex == NULL) || (data_len == 0)
+        || (hex_size <= (uint16_t)(data_len * 2)))
+    {
+        return -1;
+    }
+
+    for (i = 0; i < data_len; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02x", (unsigned int)data[i]);
+    }
+
+    hex[data_len * 2] = '\0';
+
+    return 0;
+}
+
+/**
  * @brief 将SHA256摘要编码为小写十六进制.
  *
  * @param [in] digest - 32字节摘要.
@@ -405,21 +460,7 @@ static int factoryStrRead(const char *key, char *buff, uint16_t buff_size)
  */
 static int sha256DigestToHex(const uint8_t *digest, char *hex, uint16_t hex_size)
 {
-    uint16_t i;
-
-    if ((digest == NULL) || (hex == NULL) || (hex_size <= NVDM_FACTORY_SHA256_HEX_LEN))
-    {
-        return -1;
-    }
-
-    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
-    {
-        snprintf(&hex[i * 2], 3, "%02x", (unsigned int)digest[i]);
-    }
-
-    hex[NVDM_FACTORY_SHA256_HEX_LEN] = '\0';
-
-    return 0;
+    return bytesToHex(digest, SNF_SHA256_DIGEST_SIZE, hex, hex_size);
 }
 
 /**
@@ -762,31 +803,31 @@ static int matterItemSet(const char *key, const char *value)
 }
 
 /**
- * @brief 将CD的Base64解码为二进制.
+ * @brief 将Base64解码为二进制.
  *
- * @param [in] base64 - CD的Base64字符串.
- * @param [out] cd - 二进制缓冲区.
- * @param [in] cd_size - 缓冲区长度.
- * @param [out] cd_len - 解码后的二进制长度.
+ * @param [in] base64 - Base64字符串.
+ * @param [out] out - 二进制缓冲区.
+ * @param [in] out_size - 缓冲区长度.
+ * @param [out] out_len - 解码后的二进制长度.
  * @return 0表示成功, 负数表示失败.
  */
-static int matterCdDecode(const char *base64, uint8_t *cd, uint16_t cd_size, uint32_t *cd_len)
+static int matterBase64Decode(const char *base64, uint8_t *out, uint16_t out_size, uint32_t *out_len)
 {
     int ret;
 
-    if ((base64 == NULL) || (base64[0] == '\0') || (cd == NULL)
-        || (cd_size == 0) || (cd_len == NULL))
+    if ((base64 == NULL) || (base64[0] == '\0') || (out == NULL)
+        || (out_size == 0) || (out_len == NULL))
     {
         return -1;
     }
 
-    *cd_len = 0;
-    ret = snfBase64Decode(cd,
-                          (uint32_t)cd_size,
-                          cd_len,
+    *out_len = 0;
+    ret = snfBase64Decode(out,
+                          (uint32_t)out_size,
+                          out_len,
                           (const uint8_t *)base64,
                           (uint32_t)strlen(base64));
-    if ((ret != SNF_BASE64_OK) || (*cd_len == 0) || (*cd_len > (uint32_t)cd_size))
+    if ((ret != SNF_BASE64_OK) || (*out_len == 0) || (*out_len > (uint32_t)out_size))
     {
         return -1;
     }
@@ -1696,7 +1737,7 @@ int snfMatterCdWrite(const char *data_len, const char *base64, const char *sha25
         return -1;
     }
 
-    if (matterCdDecode(base64, cd, sizeof(cd), &cd_len) != 0)
+    if (matterBase64Decode(base64, cd, sizeof(cd), &cd_len) != 0)
     {
         LOG_E(tag, "cd write base64 decode failed");
         return -1;
@@ -1733,7 +1774,7 @@ int snfMatterCdRead(uint16_t *data_len, char *base64, uint16_t base64_size,
         return -1;
     }
 
-    if (matterCdDecode(base64, cd, sizeof(cd), &cd_len) != 0)
+    if (matterBase64Decode(base64, cd, sizeof(cd), &cd_len) != 0)
     {
         return -1;
     }
@@ -1758,7 +1799,7 @@ int snfMatterCdClear(void)
     return matterItemSet(NVDM_MATTER_ITEM_CD, "");
 }
 
-int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len)
+int snfMatterCDGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len)
 {
     char base64[NVDM_MATTER_CD_B64_MAX_LEN + 1];
     uint32_t decoded_len;
@@ -1773,7 +1814,7 @@ int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len)
         return -1;
     }
 
-    if (matterCdDecode(base64, cd, cd_size, &decoded_len) != 0)
+    if (matterBase64Decode(base64, cd, cd_size, &decoded_len) != 0)
     {
         return -1;
     }
@@ -1782,3 +1823,570 @@ int snfMatterCdGet(uint8_t *cd, uint16_t cd_size, uint16_t *cd_len)
 
     return 0;
 }
+
+/**
+ * @brief 清除安全证书密钥交换会话.
+ *
+ * @param [in,out] session - 会话.
+ */
+static void matterSecureSessionClear(MatterSecureSession *session)
+{
+    if (session == NULL)
+    {
+        return;
+    }
+
+    snfEcdhFree(&session->ecdh);
+    mbedtls_platform_zeroize(session->peer_pub, sizeof(session->peer_pub));
+    mbedtls_platform_zeroize(session->iv, sizeof(session->iv));
+    mbedtls_platform_zeroize(session->tag, sizeof(session->tag));
+    session->local_ready = 0;
+    session->peer_ready = 0;
+}
+
+/**
+ * @brief 将二进制编码为Base64后写入Matter配置项.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [in] data - 二进制数据.
+ * @param [in] data_len - 数据长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int matterBinSet(const char *key, const uint8_t *data, uint32_t data_len)
+{
+    char b64[NVDM_MATTER_CERT_B64_MAX_LEN + 1];
+    uint32_t b64_len;
+    int ret;
+
+    if ((key == NULL) || (data == NULL) || (data_len == 0))
+    {
+        return -1;
+    }
+
+    ret = snfBase64Encode((uint8_t *)b64, sizeof(b64), &b64_len, data, data_len);
+    if ((ret != SNF_BASE64_OK) || (b64_len == 0) || (b64_len > NVDM_MATTER_CERT_B64_MAX_LEN))
+    {
+        return -1;
+    }
+
+    return matterItemSet(key, b64);
+}
+
+/**
+ * @brief 读取Matter配置项并解码为二进制.
+ *
+ * @param [in] key - 配置键名称.
+ * @param [out] data - 二进制缓冲区.
+ * @param [in] data_size - 缓冲区长度.
+ * @param [out] data_len - 实际二进制长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int matterBinGet(const char *key, uint8_t *data, uint16_t data_size, uint16_t *data_len)
+{
+    char b64[NVDM_MATTER_CERT_B64_MAX_LEN + 1];
+    uint32_t decoded_len;
+
+    if ((key == NULL) || (data == NULL) || (data_len == NULL))
+    {
+        return -1;
+    }
+
+    if (matterItemGet(key, b64, sizeof(b64), NVDM_MATTER_CERT_B64_MAX_LEN) != 0)
+    {
+        return -1;
+    }
+
+    if (matterBase64Decode(b64, data, data_size, &decoded_len) != 0)
+    {
+        return -1;
+    }
+
+    *data_len = (uint16_t)decoded_len;
+
+    return 0;
+}
+
+/**
+ * @brief 解析安全证书明文.
+ *
+ * 数据头长度为小端uint32.
+ *
+ * @param [in] plain - 明文.
+ * @param [in] plain_len - 明文长度.
+ * @param [out] dac_cert - DAC证书指针.
+ * @param [out] dac_cert_len - DAC证书长度.
+ * @param [out] dac_key - DAC密钥指针.
+ * @param [out] dac_key_len - DAC密钥长度.
+ * @param [out] pai_cert - PAI证书指针.
+ * @param [out] pai_cert_len - PAI证书长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int matterSecureCertParse(const uint8_t *plain, uint32_t plain_len,
+                                 const uint8_t **dac_cert, uint32_t *dac_cert_len,
+                                 const uint8_t **dac_key, uint32_t *dac_key_len,
+                                 const uint8_t **pai_cert, uint32_t *pai_cert_len)
+{
+    uint32_t dac_len;
+    uint32_t key_len;
+    uint32_t pai_len;
+    uint32_t need;
+
+    if ((plain == NULL) || (dac_cert == NULL) || (dac_cert_len == NULL)
+        || (dac_key == NULL) || (dac_key_len == NULL)
+        || (pai_cert == NULL) || (pai_cert_len == NULL)
+        || (plain_len < NVDM_MATTER_SECURE_CERT_HEADER_LEN))
+    {
+        return -1;
+    }
+
+    memcpy(&dac_len, &plain[0], sizeof(dac_len));
+    memcpy(&key_len, &plain[4], sizeof(key_len));
+    memcpy(&pai_len, &plain[8], sizeof(pai_len));
+
+    if ((dac_len == 0) || (dac_len > NVDM_MATTER_DAC_CERT_BIN_MAX_LEN)
+        || (key_len != NVDM_MATTER_DAC_KEY_BIN_LEN)
+        || (pai_len == 0) || (pai_len > NVDM_MATTER_PAI_CERT_BIN_MAX_LEN))
+    {
+        return -1;
+    }
+
+    need = NVDM_MATTER_SECURE_CERT_HEADER_LEN + dac_len + key_len + pai_len;
+    if (need != plain_len)
+    {
+        return -1;
+    }
+
+    *dac_cert = &plain[NVDM_MATTER_SECURE_CERT_HEADER_LEN];
+    *dac_cert_len = dac_len;
+    *dac_key = *dac_cert + dac_len;
+    *dac_key_len = key_len;
+    *pai_cert = *dac_key + key_len;
+    *pai_cert_len = pai_len;
+
+    return 0;
+}
+
+/**
+ * @brief 计算已存储安全证书明文的SHA256.
+ *
+ * @param [out] digest - 32字节摘要.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int matterSecureCertStoredHash(uint8_t *digest)
+{
+    uint8_t dac[NVDM_MATTER_DAC_CERT_BIN_MAX_LEN];
+    uint8_t key[NVDM_MATTER_DAC_KEY_BIN_LEN];
+    uint8_t pai[NVDM_MATTER_PAI_CERT_BIN_MAX_LEN];
+    uint8_t header[NVDM_MATTER_SECURE_CERT_HEADER_LEN];
+    uint16_t dac_len;
+    uint16_t key_len;
+    uint16_t pai_len;
+    uint32_t dac_len32;
+    uint32_t key_len32;
+    uint32_t pai_len32;
+    SnfSha256Ctx ctx;
+
+    if (digest == NULL)
+    {
+        return -1;
+    }
+
+    if (matterBinGet(NVDM_MATTER_ITEM_DAC_CERT, dac, sizeof(dac), &dac_len) != 0)
+    {
+        return -1;
+    }
+
+    if (matterBinGet(NVDM_MATTER_ITEM_DAC_KEY, key, sizeof(key), &key_len) != 0)
+    {
+        return -1;
+    }
+
+    if (matterBinGet(NVDM_MATTER_ITEM_PAI_CERT, pai, sizeof(pai), &pai_len) != 0)
+    {
+        return -1;
+    }
+
+    if (key_len != NVDM_MATTER_DAC_KEY_BIN_LEN)
+    {
+        return -1;
+    }
+
+    dac_len32 = (uint32_t)dac_len;
+    key_len32 = (uint32_t)key_len;
+    pai_len32 = (uint32_t)pai_len;
+    memcpy(&header[0], &dac_len32, sizeof(dac_len32));
+    memcpy(&header[4], &key_len32, sizeof(key_len32));
+    memcpy(&header[8], &pai_len32, sizeof(pai_len32));
+
+    if (snfSha256Init(&ctx) != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    if (snfSha256Update(&ctx, header, sizeof(header)) != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    if (snfSha256Update(&ctx, dac, dac_len32) != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    if (snfSha256Update(&ctx, key, key_len32) != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    if (snfSha256Update(&ctx, pai, pai_len32) != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    if (snfSha256Finish(&ctx, digest, SNF_SHA256_DIGEST_SIZE) != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+int snfMatterPubKeyGet(char *pub_hex, uint16_t pub_hex_size, char *sha256_hex, uint16_t sha256_size)
+{
+    MatterSecureSession *session = &matter_secure_session;
+    uint8_t pub[SNF_ECDH_PUBLIC_SIZE];
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint32_t pub_len;
+
+    if ((pub_hex == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    session->peer_ready = 0;
+    mbedtls_platform_zeroize(session->peer_pub, sizeof(session->peer_pub));
+    mbedtls_platform_zeroize(session->iv, sizeof(session->iv));
+    mbedtls_platform_zeroize(session->tag, sizeof(session->tag));
+
+    if (snfEcdhGenerate(&session->ecdh, pub, sizeof(pub), &pub_len) != SNF_ECDH_OK)
+    {
+        LOG_E(tag, "matter pub key generate failed");
+        session->local_ready = 0;
+        return -1;
+    }
+
+    if (pub_len != SNF_ECDH_PUBLIC_SIZE)
+    {
+        matterSecureSessionClear(session);
+        return -1;
+    }
+
+    if (bytesToHex(pub, (uint16_t)pub_len, pub_hex, pub_hex_size) != 0)
+    {
+        matterSecureSessionClear(session);
+        return -1;
+    }
+
+    if (sha256Bytes((const uint8_t *)pub_hex, (uint32_t)strlen(pub_hex), digest) != 0)
+    {
+        matterSecureSessionClear(session);
+        return -1;
+    }
+
+    if (sha256DigestToHex(digest, sha256_hex, sha256_size) != 0)
+    {
+        matterSecureSessionClear(session);
+        return -1;
+    }
+
+    session->local_ready = 1;
+
+    return 0;
+}
+
+int snfMatterPubKeySet(const char *pub_hex, const char *iv_hex, const char *tag_hex,
+                       const char *sha256_hex)
+{
+    MatterSecureSession *session = &matter_secure_session;
+    uint8_t expected[SNF_SHA256_DIGEST_SIZE];
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    char concat[NVDM_MATTER_ECDH_PUB_HEX_LEN + 1 + NVDM_MATTER_AES_GCM_IV_HEX_LEN + 1
+                + NVDM_MATTER_AES_GCM_TAG_HEX_LEN + 1];
+    int written;
+
+    if ((pub_hex == NULL) || (iv_hex == NULL) || (tag_hex == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (hexBytesDecode(sha256_hex, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    written = snprintf(concat, sizeof(concat), "%s,%s,%s", pub_hex, iv_hex, tag_hex);
+    if ((written <= 0) || (written >= (int)sizeof(concat)))
+    {
+        return -1;
+    }
+
+    if (sha256Bytes((const uint8_t *)concat, (uint32_t)written, digest) != 0)
+    {
+        return -1;
+    }
+
+    if (memcmp(digest, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        LOG_E(tag, "matter pub key set sha256 mismatch");
+        return -1;
+    }
+
+    if (hexBytesDecode(pub_hex, session->peer_pub, SNF_ECDH_PUBLIC_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    if (session->peer_pub[0] != MATTER_ECDH_UNCOMPRESSED_PREFIX)
+    {
+        LOG_E(tag, "matter pub key set prefix invalid");
+        return -1;
+    }
+
+    if (hexBytesDecode(iv_hex, session->iv, SNF_AES_GCM_IV_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    if (hexBytesDecode(tag_hex, session->tag, SNF_AES_GCM_TAG_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    session->peer_ready = 1;
+
+    return 0;
+}
+
+int snfMatterSecureCertWrite(const char *data_len, const char *base64, const char *sha256_hex,
+                             char *reply_sha256, uint16_t reply_sha256_size)
+{
+    MatterSecureSession *session = &matter_secure_session;
+    uint8_t *cipher = NULL;
+    uint8_t *plain = NULL;
+    uint8_t secret[SNF_ECDH_SECRET_SIZE] = {0};
+    uint8_t expected[SNF_SHA256_DIGEST_SIZE];
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint8_t stored[SNF_SHA256_DIGEST_SIZE];
+    const uint8_t *dac_cert;
+    const uint8_t *dac_key;
+    const uint8_t *pai_cert;
+    uint32_t dac_cert_len;
+    uint32_t dac_key_len;
+    uint32_t pai_cert_len;
+    uint32_t expect_len;
+    uint32_t base64_len;
+    uint32_t cipher_len;
+    uint32_t plain_len;
+    uint32_t secret_len;
+    int ret = -1;
+
+    if ((data_len == NULL) || (base64 == NULL) || (sha256_hex == NULL)
+        || (reply_sha256 == NULL))
+    {
+        return -1;
+    }
+
+    if ((session->local_ready == 0) || (session->peer_ready == 0))
+    {
+        LOG_E(tag, "secure cert write session invalid");
+        return -1;
+    }
+
+    if (parseDecU32(data_len, &expect_len) == 0)
+    {
+        goto cleanup;
+    }
+
+    base64_len = (uint32_t)strlen(base64);
+    if ((expect_len == 0) || (base64_len != expect_len)
+        || (base64_len > NVDM_MATTER_SECURE_CERT_B64_MAX_LEN))
+    {
+        LOG_E(tag, "secure cert write len mismatch, expect=%u actual=%u", expect_len, base64_len);
+        goto cleanup;
+    }
+
+    if (hexBytesDecode(sha256_hex, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (sha256Bytes((const uint8_t *)base64, base64_len, digest) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (memcmp(digest, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        LOG_E(tag, "secure cert write sha256 mismatch");
+        goto cleanup;
+    }
+
+    cipher = (uint8_t *)malloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    plain = (uint8_t *)malloc(NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+    if ((cipher == NULL) || (plain == NULL))
+    {
+        LOG_E(tag, "secure cert write alloc failed");
+        goto cleanup;
+    }
+
+    if (matterBase64Decode(base64, cipher, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN, &cipher_len) != 0)
+    {
+        LOG_E(tag, "secure cert write base64 decode failed");
+        goto cleanup;
+    }
+
+    if (snfEcdhCompute(&session->ecdh, session->peer_pub, SNF_ECDH_PUBLIC_SIZE,
+                       secret, sizeof(secret), &secret_len) != SNF_ECDH_OK)
+    {
+        LOG_E(tag, "secure cert write ecdh failed");
+        goto cleanup;
+    }
+
+    if (secret_len != SNF_AES_GCM_KEY_SIZE)
+    {
+        goto cleanup;
+    }
+
+    if (snfAesGcmDecrypt(secret, session->iv, NULL, 0, cipher, cipher_len, session->tag,
+                         plain, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN, &plain_len) != SNF_AES_GCM_OK)
+    {
+        LOG_E(tag, "secure cert write decrypt failed");
+        goto cleanup;
+    }
+
+    if (matterSecureCertParse(plain, plain_len, &dac_cert, &dac_cert_len,
+                              &dac_key, &dac_key_len, &pai_cert, &pai_cert_len) != 0)
+    {
+        LOG_E(tag, "secure cert write header invalid");
+        goto cleanup;
+    }
+
+    if (sha256Bytes(plain, plain_len, digest) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (matterBinSet(NVDM_MATTER_ITEM_DAC_CERT, dac_cert, dac_cert_len) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (matterBinSet(NVDM_MATTER_ITEM_DAC_KEY, dac_key, dac_key_len) != 0)
+    {
+        snfMatterSecureCertClear();
+        goto cleanup;
+    }
+
+    if (matterBinSet(NVDM_MATTER_ITEM_PAI_CERT, pai_cert, pai_cert_len) != 0)
+    {
+        snfMatterSecureCertClear();
+        goto cleanup;
+    }
+
+    if (matterSecureCertStoredHash(stored) != 0)
+    {
+        snfMatterSecureCertClear();
+        goto cleanup;
+    }
+
+    if (memcmp(digest, stored, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        LOG_E(tag, "secure cert write readback mismatch");
+        snfMatterSecureCertClear();
+        goto cleanup;
+    }
+
+    if (sha256DigestToHex(digest, reply_sha256, reply_sha256_size) != 0)
+    {
+        snfMatterSecureCertClear();
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    if (cipher != NULL)
+    {
+        mbedtls_platform_zeroize(cipher, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+        free(cipher);
+    }
+
+    if (plain != NULL)
+    {
+        mbedtls_platform_zeroize(plain, NVDM_MATTER_SECURE_CERT_BIN_MAX_LEN);
+        free(plain);
+    }
+
+    mbedtls_platform_zeroize(secret, sizeof(secret));
+    matterSecureSessionClear(session);
+
+    return ret;
+}
+
+int snfMatterSecureCertRead(char *serial_number, uint16_t serial_size,
+                            char *sha256_hex, uint16_t sha256_size)
+{
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+
+    if ((serial_number == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (snfSerialNumberGet(serial_number, serial_size) != 0)
+    {
+        return -1;
+    }
+
+    if (matterSecureCertStoredHash(digest) != 0)
+    {
+        return -1;
+    }
+
+    return sha256DigestToHex(digest, sha256_hex, sha256_size);
+}
+
+int snfMatterSecureCertClear(void)
+{
+    if (matterItemSet(NVDM_MATTER_ITEM_DAC_CERT, "") != 0)
+    {
+        return -1;
+    }
+
+    if (matterItemSet(NVDM_MATTER_ITEM_DAC_KEY, "") != 0)
+    {
+        return -1;
+    }
+
+    return matterItemSet(NVDM_MATTER_ITEM_PAI_CERT, "");
+}
+
+int snfMatterDacCertGet(uint8_t *dac_cert, uint16_t dac_cert_size, uint16_t *dac_cert_len)
+{
+    return matterBinGet(NVDM_MATTER_ITEM_DAC_CERT, dac_cert, dac_cert_size, dac_cert_len);
+}
+
+int snfMatterDacKeyGet(uint8_t *dac_key, uint16_t dac_key_size, uint16_t *dac_key_len)
+{
+    return matterBinGet(NVDM_MATTER_ITEM_DAC_KEY, dac_key, dac_key_size, dac_key_len);
+}
+
+int snfMatterPaiCertGet(uint8_t *pai_cert, uint16_t pai_cert_size, uint16_t *pai_cert_len)
+{
+    return matterBinGet(NVDM_MATTER_ITEM_PAI_CERT, pai_cert, pai_cert_size, pai_cert_len);
+}
+

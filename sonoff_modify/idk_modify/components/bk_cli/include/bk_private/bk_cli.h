@@ -40,12 +40,14 @@ extern "C" {
 #endif
 
 #ifdef CONFIG_KEYVALUE
-#define INBUF_SIZE                    1024
+/* sonoff modify start */
+#define INBUF_SIZE                    2048
+/* sonoff modify end */
 #elif CONFIG_ATE_TEST
 #define INBUF_SIZE                    256
 #else
 /* sonoff modify start */
-#define INBUF_SIZE                    512
+#define INBUF_SIZE                    2048
 /* sonoff modify end */
 #endif
 #define OUTBUF_SIZE                   2048

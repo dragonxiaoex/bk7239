@@ -144,7 +144,7 @@ CHIP_ERROR FactoryDataProvider::GetCertificationDeclaration(MutableByteSpan & ou
     uint8_t cd[NVDM_MATTER_CD_BIN_MAX_LEN];
     uint16_t cd_len = 0;
 
-    VerifyOrReturnError(0 == snfMatterCdGet(cd, sizeof(cd), &cd_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(0 == snfMatterCDGet(cd, sizeof(cd), &cd_len), CHIP_ERROR_READ_FAILED);
     VerifyOrReturnError(outBuffer.size() >= cd_len, CHIP_ERROR_BUFFER_TOO_SMALL);
     memcpy(outBuffer.data(), cd, cd_len);
     outBuffer.reduce_size(cd_len);
@@ -174,6 +174,15 @@ CHIP_ERROR FactoryDataProvider::GetFirmwareInformation(MutableByteSpan & out_fir
 
 CHIP_ERROR FactoryDataProvider::GetDeviceAttestationCert(MutableByteSpan & outBuffer)
 {
+    /* sonoff modify start */
+    uint8_t dac_cert[NVDM_MATTER_DAC_CERT_BIN_MAX_LEN];
+    uint16_t dac_cert_len = 0;
+
+    VerifyOrReturnError(0 == snfMatterDacCertGet(dac_cert, sizeof(dac_cert), &dac_cert_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(outBuffer.size() >= dac_cert_len, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(outBuffer.data(), dac_cert, dac_cert_len);
+    outBuffer.reduce_size(dac_cert_len);
+    #if 0
     ReturnErrorOnFailure(ReadCertDataHeader());
     VerifyOrReturnError(outBuffer.size() >= mCertDataHeader.DeviceAttestationCert.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -185,11 +194,22 @@ CHIP_ERROR FactoryDataProvider::GetDeviceAttestationCert(MutableByteSpan & outBu
                 ),
             CHIP_ERROR_READ_FAILED);
     outBuffer.reduce_size(mCertDataHeader.DeviceAttestationCert.length);
+    #endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetProductAttestationIntermediateCert(MutableByteSpan & outBuffer)
 {
+    /* sonoff modify start */
+    uint8_t pai_cert[NVDM_MATTER_PAI_CERT_BIN_MAX_LEN];
+    uint16_t pai_cert_len = 0;
+
+    VerifyOrReturnError(0 == snfMatterPaiCertGet(pai_cert, sizeof(pai_cert), &pai_cert_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(outBuffer.size() >= pai_cert_len, CHIP_ERROR_BUFFER_TOO_SMALL);
+    memcpy(outBuffer.data(), pai_cert, pai_cert_len);
+    outBuffer.reduce_size(pai_cert_len);
+#if 0
     ReturnErrorOnFailure(ReadCertDataHeader());
     VerifyOrReturnError(outBuffer.size() >= mCertDataHeader.ProductAttestationIntermediateCert.length, CHIP_ERROR_BUFFER_TOO_SMALL);
     VerifyOrReturnError(
@@ -201,11 +221,34 @@ CHIP_ERROR FactoryDataProvider::GetProductAttestationIntermediateCert(MutableByt
                 ),
             CHIP_ERROR_READ_FAILED);
     outBuffer.reduce_size(mCertDataHeader.ProductAttestationIntermediateCert.length);
+#endif
+    /* sonoff modify end */
     return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::SignWithDeviceAttestationKey(const ByteSpan & messageToSign, MutableByteSpan & outSignBuffer)
 {
+    /* sonoff modify start */
+    Crypto::P256ECDSASignature signature;
+    Crypto::P256Keypair keypair;
+    Crypto::P256PublicKey dacPublicKey;
+    uint8_t dac_cert[NVDM_MATTER_DAC_CERT_BIN_MAX_LEN];
+    uint8_t dac_key[NVDM_MATTER_DAC_KEY_BIN_LEN];
+    uint16_t dac_cert_len = 0;
+    uint16_t dac_key_len  = 0;
+
+    VerifyOrReturnError(IsSpanUsable(outSignBuffer), CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(IsSpanUsable(messageToSign), CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(outSignBuffer.size() >= signature.Capacity(), CHIP_ERROR_BUFFER_TOO_SMALL);
+    VerifyOrReturnError(0 == snfMatterDacCertGet(dac_cert, sizeof(dac_cert), &dac_cert_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(0 == snfMatterDacKeyGet(dac_key, sizeof(dac_key), &dac_key_len), CHIP_ERROR_READ_FAILED);
+    VerifyOrReturnError(dac_key_len == NVDM_MATTER_DAC_KEY_BIN_LEN, CHIP_ERROR_INTERNAL);
+    ReturnErrorOnFailure(chip::Crypto::ExtractPubkeyFromX509Cert(ByteSpan(dac_cert, dac_cert_len), dacPublicKey));
+    ReturnErrorOnFailure(LoadKeypairFromRaw(ByteSpan(dac_key, dac_key_len),
+                                            ByteSpan(dacPublicKey.Bytes(), dacPublicKey.Length()), keypair));
+    ReturnErrorOnFailure(keypair.ECDSA_sign_msg(messageToSign.data(), messageToSign.size(), signature));
+    ReturnErrorOnFailure(CopySpanToMutableSpan(ByteSpan{ signature.ConstBytes(), signature.Length() }, outSignBuffer));
+#if 0
 #if CONFIG_BEKEN_DAC_PRIV_ENCRYPT
     size_t kDacPublicKeyLen = 0, kDacPrivateKeyLen = 0;
     uint8_t kEncryptDacPrivateKey[53] = { 0 };// AESNonceLen + 40,
@@ -281,6 +324,9 @@ CHIP_ERROR FactoryDataProvider::SignWithDeviceAttestationKey(const ByteSpan & me
     ReturnErrorOnFailure(keypair.ECDSA_sign_msg(messageToSign.data(), messageToSign.size(), signature));
 
     return CopySpanToMutableSpan(ByteSpan{ signature.ConstBytes(), signature.Length() }, outSignBuffer);
+#endif
+    /* sonoff modify end */
+    return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR FactoryDataProvider::GetSetupDiscriminator(uint16_t & setupDiscriminator)

@@ -66,6 +66,11 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_MT_CD_WRITE               "AT+MT_CD_WRITE"
 #define AT_CMD_MT_CD_READ                "AT+MT_CD_READ"
 #define AT_CMD_MT_CD_DELETE              "AT+MT_CD_DELETE"
+#define AT_CMD_MT_PUB_KEY_GET            "AT+MT_PUB_KEY_GET"
+#define AT_CMD_MT_PUB_KEY_SET            "AT+MT_PUB_KEY_SET"
+#define AT_CMD_MT_SECURE_CERT_WRITE      "AT+MT_SECURE_CERT_WRITE"
+#define AT_CMD_MT_SECURE_CERT_READ       "AT+MT_SECURE_CERT_READ"
+#define AT_CMD_MT_SECURE_CERT_DELETE     "AT+MT_SECURE_CERT_DELETE"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
@@ -581,6 +586,30 @@ static void atPrintLicenseError(const char *ident, const char *reason)
 {
     printf("%s=ERROR\r\n", AT_CMD_LICENSE_WRITE);
     printf("%s:%s\r\n", ident, reason);
+}
+
+/**
+ * @brief 将被CLI按`=`切开的Base64填充符写回.
+ *
+ * @param [in,out] base64 - Base64起始指针, 与sha256同属一块输入缓冲.
+ * @param [in] sha256 - SHA256字段起始指针.
+ */
+static void atRestoreBase64Padding(char *base64, char *sha256)
+{
+    char *p;
+
+    if ((base64 == NULL) || (sha256 == NULL) || (base64 >= sha256))
+    {
+        return;
+    }
+
+    for (p = base64; p < (sha256 - 1); p++)
+    {
+        if (*p == '\0')
+        {
+            *p = '=';
+        }
+    }
 }
 
 /**
@@ -1403,7 +1432,6 @@ static void atMtCdWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int arg
 {
     char *base64;
     char *sha256;
-    char *p;
 
     (void)pcWriteBuffer;
     (void)xWriteBufferLen;
@@ -1417,13 +1445,7 @@ static void atMtCdWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int arg
 
     sha256 = argv[argc - 1];
     base64 = argv[2];
-    for (p = base64; p < (sha256 - 1); p++)
-    {
-        if (*p == '\0')
-        {
-            *p = '=';
-        }
-    }
+    atRestoreBase64Padding(base64, sha256);
 
     if (snfMatterCdWrite(argv[1], base64, sha256) != 0)
     {
@@ -1497,6 +1519,163 @@ static void atMtCdDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int ar
 }
 
 /**
+ * @brief 处理AT+MT_PUB_KEY_GET命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtPubKeyGetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char pub_hex[NVDM_MATTER_ECDH_PUB_HEX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_GET);
+        return;
+    }
+
+    if (snfMatterPubKeyGet(pub_hex, sizeof(pub_hex), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_GET);
+        return;
+    }
+
+    printf("%s=%s,%s\r\n", AT_CMD_MT_PUB_KEY_GET, pub_hex, sha256);
+}
+
+/**
+ * @brief 处理AT+MT_PUB_KEY_SET命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtPubKeySetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 5) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[3] == NULL) || (argv[4] == NULL))
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_SET);
+        return;
+    }
+
+    if (snfMatterPubKeySet(argv[1], argv[2], argv[3], argv[4]) != 0)
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_SET);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_PUB_KEY_SET, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_WRITE命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char reply_sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char *base64;
+    char *sha256;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 4) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[argc - 1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_WRITE);
+        return;
+    }
+
+    sha256 = argv[argc - 1];
+    base64 = argv[2];
+    atRestoreBase64Padding(base64, sha256);
+
+    if (snfMatterSecureCertWrite(argv[1], base64, sha256, reply_sha256, sizeof(reply_sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_WRITE);
+        return;
+    }
+
+    printf("%s=OK\r\n", AT_CMD_MT_SECURE_CERT_WRITE);
+    printf("SHA256=%s\r\n", reply_sha256);
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_READ命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char serial_number[NVDM_FACTORY_SERIAL_NUMBER_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_READ);
+        return;
+    }
+
+    if (snfMatterSecureCertRead(serial_number, sizeof(serial_number), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_READ);
+        return;
+    }
+
+    printf("%s=%s,%s\r\n", AT_CMD_MT_SECURE_CERT_READ, serial_number, sha256);
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_DELETE命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_DELETE);
+        return;
+    }
+
+    if (snfMatterSecureCertClear() != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SECURE_CERT_DELETE, "OK");
+}
+
+/**
  * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
  */
 static const struct cli_command snfAtCliCommands[] = {
@@ -1509,6 +1688,11 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_MT_CD_WRITE, "write matter certification declaration", atMtCdWriteCommand},
     {AT_CMD_MT_CD_READ, "read matter certification declaration", atMtCdReadCommand},
     {AT_CMD_MT_CD_DELETE, "delete matter certification declaration", atMtCdDeleteCommand},
+    {AT_CMD_MT_PUB_KEY_GET, "get matter ecdh public key", atMtPubKeyGetCommand},
+    {AT_CMD_MT_PUB_KEY_SET, "set peer ecdh public key", atMtPubKeySetCommand},
+    {AT_CMD_MT_SECURE_CERT_WRITE, "write matter secure cert", atMtSecureCertWriteCommand},
+    {AT_CMD_MT_SECURE_CERT_READ, "read matter secure cert status", atMtSecureCertReadCommand},
+    {AT_CMD_MT_SECURE_CERT_DELETE, "delete matter secure cert", atMtSecureCertDeleteCommand},
     {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
     {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
     {AT_CMD_LICENSE_WRITE, "write factory license json", atLicenseWriteCommand},
