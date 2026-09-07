@@ -28,6 +28,7 @@ extern "C" {
 #define NVDM_MATTER_ITEM_PRODUCT_NAME       "product.name"
 #define NVDM_MATTER_ITEM_RD_ID_UID          "rd.id.uid"
 #define NVDM_MATTER_ITEM_PASSCODE           "passcode"
+#define NVDM_MATTER_ITEM_CD                 "CD"
 
 /** @brief 工厂配置项键名. */
 #define NVDM_FACTORY_ITEM_SERIAL_NUMBER     "serial.number"
@@ -173,6 +174,22 @@ int snfLicenseClear(void);
  * @return SnfLicenseResult.
  */
 int snfLicenseWrite(const char *json, char *reply_sha256, uint16_t reply_sha256_size);
+
+/**
+ * @brief 读取已写入的License摘要信息.
+ *
+ * 五项均存在且格式合法时计算C5 SHA256. 未写入或校验异常返回失败.
+ *
+ * @param [out] uiid - uiid十进制字符串缓冲区.
+ * @param [in] uiid_size - 缓冲区长度, 需大于NVDM_FACTORY_UIID_STR_MAX_LEN.
+ * @param [out] device_model - device_model缓冲区.
+ * @param [in] device_model_size - 缓冲区长度, 需大于NVDM_MATTER_NAME_MAX_LEN.
+ * @param [out] sha256 - C5 SHA256缓冲区, 小写64位十六进制.
+ * @param [in] sha256_size - 缓冲区长度, 需大于NVDM_FACTORY_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示未写入、校验异常或读取失败.
+ */
+int snfLicenseRead(char *uiid, uint16_t uiid_size, char *device_model, uint16_t device_model_size,
+                   char *sha256, uint16_t sha256_size);
 
 /**
  * @brief 读取Matter鉴别器.

@@ -63,6 +63,9 @@ static const char *tag = "SNF-CLI";
 #define AT_CMD_ACTIVE_CODE               "AT+ACTIVE_CODE"
 #define AT_CMD_ACTIVE_CODE_QUERY         "AT+ACTIVE_CODE?"
 #define AT_CMD_LICENSE_WRITE             "AT+LICENSE_WRITE"
+#define AT_CMD_LICENSE_READ              "AT+LICENSE_READ"
+#define AT_CMD_LICENSE_READ_QUERY        "AT+LICENSE_READ?"
+#define AT_CMD_LICENSE_DELETE            "AT+LICENSE_DELETE"
 #define AT_MT_FACTORY_DATA_FIELD_NUM     10
 #define AT_MT_FACTORY_DATA_WRITE_ARGC    12
 #define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
@@ -983,6 +986,69 @@ static void atLicenseWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int 
 }
 
 /**
+ * @brief 处理AT+LICENSE_READ?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char uiid[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    char device_model[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_LICENSE_READ);
+        return;
+    }
+
+    if (snfLicenseRead(uiid, sizeof(uiid), device_model, sizeof(device_model),
+                       sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_LICENSE_READ);
+        return;
+    }
+
+    printf("%s=%s,%s,", AT_CMD_LICENSE_READ, uiid, device_model);
+    printLines(sha256);
+    printf("\r\n");
+}
+
+/**
+ * @brief 处理AT+LICENSE_DELETE删除命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_LICENSE_DELETE);
+        return;
+    }
+
+    if (snfLicenseClear() != 0)
+    {
+        atPrintError(AT_CMD_LICENSE_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_LICENSE_DELETE, "OK");
+}
+
+/**
  * @brief 将十六进制字符转换为半字节.
  *
  * @param [in] ch - 十六进制字符.
@@ -1410,6 +1476,8 @@ static const struct cli_command snfAtCliCommands[] = {
     {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
     {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
     {AT_CMD_LICENSE_WRITE, "write factory license json", atLicenseWriteCommand},
+    {AT_CMD_LICENSE_READ_QUERY, "query factory license status", atLicenseReadCommand},
+    {AT_CMD_LICENSE_DELETE, "delete factory license data", atLicenseDeleteCommand},
 };
 
 #define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))

@@ -70,6 +70,7 @@ static const SnfNvdmItem nvdm_matter_item_array[] = {
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PRODUCT_NAME, ""),
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_RD_ID_UID, ""),
     NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_PASSCODE, "0"),
+    NVDM_MATTER_ITEM(NVDM_MATTER_ITEM_CD, ""),
 };
 
 static const SnfNvdmItemTable nvdm_item_table_array[] = {

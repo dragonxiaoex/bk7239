@@ -1281,6 +1281,74 @@ int snfLicenseWrite(const char *json, char *reply_sha256, uint16_t reply_sha256_
     return SNF_LICENSE_OK;
 }
 
+int snfLicenseRead(char *uiid, uint16_t uiid_size, char *device_model, uint16_t device_model_size,
+                   char *sha256, uint16_t sha256_size)
+{
+    const char *c5_parts[5];
+    char device_id[NVDM_FACTORY_DEVICE_ID_LEN + 1];
+    char apikey[NVDM_FACTORY_APIKEY_LEN + 1];
+    char base_mac[NVDM_FACTORY_BASE_MAC_STR_LEN + 1];
+    char model[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char uiid_str[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    uint8_t mac[NVDM_FACTORY_BASE_MAC_LEN];
+
+    if ((uiid == NULL) || (uiid_size <= NVDM_FACTORY_UIID_STR_MAX_LEN)
+        || (device_model == NULL) || (device_model_size <= NVDM_MATTER_NAME_MAX_LEN)
+        || (sha256 == NULL) || (sha256_size <= NVDM_FACTORY_SHA256_HEX_LEN))
+    {
+        return -1;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_ID, device_id, sizeof(device_id)) != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_FACTORY_APIKEY, apikey, sizeof(apikey)) != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_BASE_MAC, base_mac, sizeof(base_mac)) != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_MODEL, model, sizeof(model)) != 0)
+    {
+        return -1;
+    }
+
+    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_UIID, uiid_str, sizeof(uiid_str)) != 0)
+    {
+        return -1;
+    }
+
+    if ((strlen(device_id) != NVDM_FACTORY_DEVICE_ID_LEN)
+        || (factoryApikeyIsValid(apikey) == 0)
+        || (baseMacParse(base_mac, mac) != 0)
+        || (model[0] == '\0')
+        || (uiid_str[0] == '\0'))
+    {
+        return -1;
+    }
+
+    c5_parts[0] = device_id;
+    c5_parts[1] = apikey;
+    c5_parts[2] = base_mac;
+    c5_parts[3] = model;
+    c5_parts[4] = uiid_str;
+    if (licenseSha256Hex(c5_parts, 5, sha256, sha256_size) != 0)
+    {
+        return -1;
+    }
+
+    strcpy(uiid, uiid_str);
+    strcpy(device_model, model);
+
+    return 0;
+}
+
 int snfMatterDiscriminatorGet(uint16_t *discriminator)
 {
     uint32_t value;
