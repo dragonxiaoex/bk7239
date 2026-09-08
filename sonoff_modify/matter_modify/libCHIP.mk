@@ -50,6 +50,7 @@ INCLUDES += -I$(BASEDIR)/middleware/arch/$(TARGET)/soc
 INCLUDES += -I$(BASEDIR)/middleware/boards/$(TARGET)/partitions
 # sonoff modify start
 INCLUDES += -I$(PROJECT_BUILD_DIR)/partitions
+INCLUDES += -I$(PROJECT_BUILD_DIR)/security
 INCLUDES += -I$(PROJECT_BUILD_DIR)/sys_persist_config
 # sonoff modify end
 
