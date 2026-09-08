@@ -11,6 +11,19 @@
 #ifndef __SONOFF_CLI_H__
 #define __SONOFF_CLI_H__
 
+#include <stdint.h>
+
+/**
+ * @brief 等待串口产测进入命令factory!.
+ *
+ * 仅供启动线程在snfCliInit成功后调用, 不支持并发等待.
+ * 命令结束符沿用SDK CLI规则, 支持factory!\r\n.
+ *
+ * @param [in] timeout_ms - 等待超时时间, 单位毫秒.
+ * @return 0表示收到命令, 负数表示超时或等待失败.
+ */
+int snfCliWaitFactoryReply(uint32_t timeout_ms);
+
 /**
  * @brief 初始化Sonoff串口工具箱命令.
  *

@@ -1,9 +1,23 @@
 #include "stdint.h"
 #include <components/system.h>
+#include <driver/uart.h>
+
+#include "bk_openthread.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include "sonoff_log.h"
 #include "sonoff_project_config.h"
 #include "sonoff_main.h"
+#include "sonoff_cli.h"
+#include "sonoff_nvdm_config.h"
+#include "sonoff_nvdm.h"
+#include "sonoff_log.h"
+#include "sonoff_factory.h"
+
+static const char *tag = "SNF-ENTRY";
+
+#define SNF_FACTORY_REPLY_TIMEOUT_MS 3000
 
 static const char *resetReasonToString(RESET_SOURCE_STATUS reason)
 {
@@ -51,8 +65,67 @@ static void showSystemInfo(void)
     printf("\r\n");
 }
 
+static void disableLocalConsoleRx(void)
+{
+    uart_id_t uart_id = (uart_id_t)bk_get_printf_port();
+    bk_uart_disable_rx_interrupt(uart_id);
+    bk_uart_disable_rx(uart_id);
+}
+
 void sonoffEntry(void)
 {
+    int ret = 0;
+    int factory_mode_flag = 0;
+
     showSystemInfo();
-    snfMainInit();
+
+    ret = snfNvdmInit();
+    if (ret != 0)
+    {
+        LOG_I(tag, "nvdm init failed, ret=%d", ret);
+    }
+
+    ret = snfBaseMacApply();
+    if (ret != 0)
+    {
+        LOG_I(tag, "base mac apply failed, ret=%d", ret);
+    }
+
+    ret = snfCliInit();
+    if (ret != 0)
+    {
+        LOG_I(tag, "cli init failed, ret=%d", ret);
+    }
+
+    factory_mode_flag = (snfLicenseIsValid() != 0);
+
+    if (factory_mode_flag == 0)
+    {
+        LOG_RAW("factory?\r\n");
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+        LOG_RAW("factory?\r\n");
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+        LOG_RAW("factory?\r\n");
+        if (snfCliWaitFactoryReply(SNF_FACTORY_REPLY_TIMEOUT_MS) == 0)
+        {
+            factory_mode_flag = 1;
+        }
+    }
+
+    if(factory_mode_flag == 1)
+    {
+        snfFactoryModeStart();
+    }
+    else
+    {
+        disableLocalConsoleRx();
+        snfMainInit();
+
+#if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
+        extern void ChipTest(void);
+        ChipTest();
+#endif
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        bk_openthread_init();
+    }
 }

@@ -1088,34 +1088,26 @@ int snfBaseMacApply(void)
 
     if (baseMacParse(str, mac) != 0)
     {
-        LOG_E(tag, "base mac invalid, keep sdk mac");
+        LOG_I(tag, "base mac invalid, keep sdk mac");
         return 0;
     }
 
     if (bk_set_base_mac_ram(mac) != BK_OK)
     {
-        LOG_E(tag, "base mac ram set failed");
+        LOG_I(tag, "base mac ram set failed");
         return -1;
     }
 
     return 0;
 }
 
-int snfLicenseIsBurned(void)
+int snfLicenseIsValid(void)
 {
-    char device_id[NVDM_FACTORY_DEVICE_ID_LEN + 1];
+    char uiid[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    char device_model[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
 
-    if (factoryStrRead(NVDM_FACTORY_ITEM_DEVICE_ID, device_id, sizeof(device_id)) != 0)
-    {
-        return -1;
-    }
-
-    if (device_id[0] == '\0')
-    {
-        return -1;
-    }
-
-    return 0;
+    return snfLicenseRead(uiid, sizeof(uiid), device_model, sizeof(device_model), sha256, sizeof(sha256));
 }
 
 int snfLicenseClear(void)
@@ -2415,4 +2407,3 @@ int snfMatterPaiCertGet(uint8_t *pai_cert, uint16_t pai_cert_size, uint16_t *pai
 {
     return matterBinGet(NVDM_MATTER_ITEM_PAI_CERT, pai_cert, pai_cert_size, pai_cert_len);
 }
-

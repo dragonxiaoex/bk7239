@@ -412,13 +412,16 @@ static void app_main_thread(void *arg)
 #if CONFIG_BL2_UPGRADE_WITH_APP
 	bl2_ota_check();
 #endif
+/* sonoff modify start */
+#if 0
 #if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
 #ifdef CONFIG_MATTER_EXAMPLE
 	if (CONFIG_MATTER_EXAMPLE[0] != '\0')
 	    start_matter();
 #endif
 #endif //#if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
-
+#endif
+/* sonoff modify end */
     if(ate_is_enabled())
     {
         os_printf("ATE enabled = 1\r\n");

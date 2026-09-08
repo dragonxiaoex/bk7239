@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include <FreeRTOS.h>
+#include <semphr.h>
 #include <task.h>
 #include <components/system.h>
 
@@ -96,6 +97,16 @@ typedef struct
  * @brief Matter工厂数据单项写入函数.
  */
 typedef int (*AtMatterItemSet)(const char *value);
+
+/** @brief 启动阶段产测应答等待状态. */
+typedef struct
+{
+    SemaphoreHandle_t reply_sem;
+    TickType_t start_ticks;
+    TickType_t timeout_ticks;
+} SnfFactoryReplyState;
+
+static SnfFactoryReplyState factory_reply_state = {0};
 
 /**
  * @brief 打印WIFI测试命令帮助.
@@ -892,7 +903,7 @@ static void atLicenseWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int 
         return;
     }
 
-    if (snfLicenseIsBurned() == 0)
+    if (snfLicenseIsValid() == 0)
     {
         atPrintLicenseError("FAILED OPERATE", "LICENSE ALREADY");
         return;
@@ -1726,12 +1737,72 @@ static void atHelpCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, ch
 }
 
 /**
- * @brief Sonoff工具箱串口命令表.
+ * @brief 在启动等待窗口内通知产测进入请求.
+ *
+ * @param [out] pcWriteBuffer - SDK CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - 输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
  */
+static void factoryReplyCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    SnfFactoryReplyState *state = &factory_reply_state;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        return;
+    }
+
+    if (strcmp(argv[0], "factory!") != 0)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    if (state->reply_sem != NULL)
+    {
+        if ((TickType_t)(xTaskGetTickCount() - state->start_ticks) < state->timeout_ticks)
+        {
+            xSemaphoreGive(state->reply_sem);
+        }
+    }
+    taskEXIT_CRITICAL();
+}
+
+/** @brief Sonoff工具箱串口命令表. */
 static const struct cli_command snfCliCommands[] = {
     {"sonoff", "sonoff <command> [args]", snfCliCommand},
     {"AT", "AT command", atHelpCommand},
+    {"factory!", "enter factory mode during boot", factoryReplyCommand},
 };
+
+int snfCliWaitFactoryReply(uint32_t timeout_ms)
+{
+    SnfFactoryReplyState *state = &factory_reply_state;
+    SemaphoreHandle_t reply_sem = xSemaphoreCreateBinary();
+    BaseType_t result;
+
+    if (reply_sem == NULL)
+    {
+        LOG_E(tag, "factory reply semaphore init failed");
+        return -1;
+    }
+
+    taskENTER_CRITICAL();
+    state->start_ticks = xTaskGetTickCount();
+    state->timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    state->reply_sem = reply_sem;
+    taskEXIT_CRITICAL();
+
+    result = xSemaphoreTake(reply_sem, pdMS_TO_TICKS(timeout_ms));
+
+    taskENTER_CRITICAL();
+    state->reply_sem = NULL;
+    taskEXIT_CRITICAL();
+    vSemaphoreDelete(reply_sem);
+
+    return (result == pdTRUE) ? 0 : -1;
+}
 
 int snfCliInit(void)
 {

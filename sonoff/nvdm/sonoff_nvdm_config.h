@@ -166,13 +166,13 @@ typedef enum
 } SnfLicenseResult;
 
 /**
- * @brief 检查设备是否已烧录License.
+ * @brief 检查License是否通过基本有效性校验.
  *
- * device.id非空视为已烧录.
+ * 使用snfLicenseRead读取并校验License, 校验范围与该接口一致.
  *
- * @return 0表示已烧录, 负数表示未烧录或读取失败.
+ * @return 0表示校验通过, 负数表示未写入、校验异常或读取失败.
  */
-int snfLicenseIsBurned(void);
+int snfLicenseIsValid(void);
 
 /**
  * @brief 清空License相关NVDM项.

@@ -123,27 +123,6 @@ int snfMainInit(void)
     SnfMainState *main_state = &main_state_data;
     int ret;
 
-    ret = snfNvdmInit();
-    if (ret != 0)
-    {
-        LOG_E(tag, "nvdm init failed, ret=%d", ret);
-        return -1;
-    }
-
-    ret = snfBaseMacApply();
-    if (ret != 0)
-    {
-        LOG_E(tag, "base mac apply failed, ret=%d", ret);
-        return -1;
-    }
-
-    ret = snfCliInit();
-    if (ret != 0)
-    {
-        LOG_E(tag, "cli init failed, ret=%d", ret);
-        return -2;
-    }
-
     if (main_state->event_queue == NULL)
     {
         main_state->event_queue = xQueueCreate(SONOFF_MAIN_EVENT_QUEUE_SIZE,
