@@ -117,7 +117,7 @@ int snfActiveCodeSet(const char *active_code);
 /**
  * @brief 检查当前芯片是否已授权.
  *
- * 明文为芯片唯一ID的16字节AES块: 当前使用6字节MAC, 其余字节补0.
+ * 明文为芯片唯一ID的16字节AES块: OTP原始MAC的6字节加10字节0, 不受BASE MAC覆盖影响.
  *
  * @return 0表示已授权, 负数表示未授权或校验失败.
  */

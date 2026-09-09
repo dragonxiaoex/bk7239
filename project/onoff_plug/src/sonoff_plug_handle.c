@@ -39,6 +39,8 @@ int snfPlugOnOffRawSet(uint8_t onoff)
         return -1;
     }
 
+    snfNvdmPlugOnOffSet(onoff);
+
     return 0;
 }
 
@@ -83,13 +85,13 @@ void snfPlugHandleInit(void)
     }
 
     onoff = snfNvdmPlugOnOffGet();
-    if(onoff == 0)
+    if(onoff == 1)
     {
-        bk_gpio_set_output_low(SNF_PLUG_CONTROL_GPIO);
+        bk_gpio_set_output_high(SNF_PLUG_CONTROL_GPIO);
     }
     else
     {
-        bk_gpio_set_output_high(SNF_PLUG_CONTROL_GPIO);
+        bk_gpio_set_output_low(SNF_PLUG_CONTROL_GPIO);
     }
 
     return;

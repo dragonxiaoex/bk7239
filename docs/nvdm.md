@@ -1,154 +1,205 @@
-# NVDM 数据存储与读取说明
+# NVDM 配置持久化
 
-适用：`onoff_plug / BK7239N`。依据：2026-09-09 工作区源码；未进行本次构建或板端验证。
+NVDM 为用户配置、工厂信息和 Matter 生产数据提供统一的持久化接口。数据按 `group.key` 存入 EasyFlash，读写同步完成；启动时补齐缺失项，用户清理时恢复已注册用户项的默认值。
 
-**NVDM 为用户配置、工厂信息和 Matter 生产数据提供统一的持久化读写接口。数据按 `group.key` 存入 EasyFlash，调用同步完成；启动时补齐缺失项，主动清理时恢复指定配置的默认值。**
+**公共层负责存储机制与公共配置，私有项目定义自己的配置项和业务访问接口。** 当前 `project/onoff_plug/` 用插座掉电保持演示私有 NVDM 的接入。
 
-## 1. 使用场景与数据组织
+## 1. 系统上下文与存储边界（C4 L1 / L2）
 
-产测上位机通过 CLI/AT 写入生产数据；启动流程初始化配置、读取 MAC 和 License；Matter 通过定制的 `FactoryDataProvider` 获取配网参数及凭据；产品代码通过私有接口访问自己的配置项。
+系统边界是 Sonoff 设备。产测上位机通过 CLI/AT 写入生产数据；设备启动时读取配置、MAC 和 License；Matter 通过项目定制的 `FactoryDataProvider` 获取配网参数与凭据；私有项目读写自身业务配置。
 
-| 逻辑分组 | 主要内容 | 默认值特点 |
+从 C4 容器层看，配置访问、NVDM 和 EasyFlash 均位于**应用固件容器（C/C++、FreeRTOS）**中，持久化数据存储位于片上 Flash。NVDM 没有独立任务、队列或异步回调，也不维护完整的 RAM 配置副本。
+
+| 存储范围 | 内容 | 所属机制 |
 | --- | --- | --- |
-| `user` | Wi-Fi 参数、产品私有项，如 `test.item1` | 注册表提供产品初始值 |
-| `factory` | 序列号、授权码、设备 ID、API Key、型号、UIID、BASE MAC | 多数为空，需生产写入 |
-| `matter` | 配网参数、厂商/产品信息、CD、DAC 证书与私钥、PAI 证书 | 多数为空或占位值，默认项存在不代表已具备配网条件 |
+| `easyflash` 分区中的 `user.*` | Wi-Fi 参数、私有项目配置，如 `user.plug.onoff` | NVDM 用户组 |
+| 同分区中的 `factory.*` | 序列号、授权码、设备 ID、API Key、BASE MAC、型号、UIID 及私有工厂项 | NVDM 工厂组 |
+| 同分区中的 `matter.*` | 配网参数、厂商/产品信息、CD、DAC 证书及私钥、PAI 证书 | NVDM Matter 生产数据组 |
+| 独立的 `matter` 分区 | Matter 运行时持久化数据，包括 Fabric 和配置为持久化的属性 | Matter 平台存储 |
+| 独立的 `ot_setting` 分区 | Thread 网络持久化数据 | OpenThread 平台存储 |
 
-三个组共用 `easyflash` 分区，仅通过键名前缀区分。例如：`group="user"`、`key="test.item1"` 对应实际键 `user.test.item1`。NVDM 的 `matter` 组与 Flash 中独立的 `matter` 分区是不同的存储范围。
+三个 NVDM 组共享一个 EasyFlash 存储区，通过键名前缀区分，不是三个物理分区。`group="user"`、`key="plug.onoff"` 合成为 `user.plug.onoff`。**NVDM 的 `matter` 组与独立的 `matter` 分区用途不同，清理范围也不同。**
 
-存储格式统一按字符串使用：整数转为十进制文本，Matter 部分 ID 使用十六进制文本，证书和私钥使用 Base64，业务读取时再解析或解码。Base64 不提供存储加密；证书导入时的 ECDH/AES-GCM 处理属于传输接入流程。
+当前 [分区配置](../build_tool/config/bk7239n/partitions.csv) 为 EasyFlash 预留 **16 KiB**；构建应用 [项目覆盖配置 ef_cfg.h](../sonoff_modify/idk_modify/components/easy_flash/easy_flash_V4.X/inc/ef_cfg.h) 后，`ENV_AREA_SIZE` 同为 **16 KiB**。SDK 原文件仍可能显示 8 KiB，应以覆盖后的构建配置为准。可用载荷小于分区容量，需要留出元数据和垃圾回收空间；起始地址由 SDK 查询 `BK_PARTITION_EASYFLASH` 获取。
 
-当前 [分区配置](../build_tool/config/bk7239n/partitions.csv) 为 EasyFlash 预留 **16 KiB**，但 SDK [ef_cfg.h](../bk_openthread/bk_idk/components/easy_flash/easy_flash_V4.X/inc/ef_cfg.h) 的 `ENV_AREA_SIZE` 为 **8 KiB**，其中还需容纳元数据和垃圾回收空间。存储起始地址由 SDK 查询 `BK_PARTITION_EASYFLASH` 获取。
-
-## 2. 模块划分与职责
-
-NVDM 及 EasyFlash 均运行在应用固件内，Flash 是持久化数据存储。下图展开固件中的组件关系。
+## 2. 组件职责与依赖（C4 L3）
 
 ```mermaid
 flowchart LR
-    subgraph firmware ["应用固件"]
-        callers["调用方：启动、CLI、Matter、产品业务"]
-        configAccess["配置访问：格式校验与编解码"]
-        nvdmCore["NVDM 核心：默认项、通用读写与清理"]
-        nvdmPort["NVDM 适配：键名与返回值转换"]
-        easyFlash["EasyFlash：KV 管理、互斥与空间回收"]
+    subgraph firmware ["容器：应用固件，C/C++、FreeRTOS"]
+        entry["调用组件：启动、CLI、Matter"]
+        product["组件：私有项目业务"]
+        configAccess["组件：公共配置访问，格式校验与编解码"]
+        privateAccess["组件：私有配置访问，项目定义的 Get / Set"]
+        nvdmCore["组件：NVDM 核心，注册表、默认值与通用读写"]
+        nvdmPort["组件：NVDM 适配，键名与返回值转换"]
+        easyFlash["依赖：EasyFlash，KV 管理、锁与空间回收"]
     end
-    envStore[("Flash：easyflash 分区")]
-    callers -->|"业务 Get / Set"| configAccess
-    callers -->|"初始化、通用读写、用户清理"| nvdmCore
+    envStore[("数据存储：Flash easyflash 分区")]
+    entry -->|"生产数据与凭据 Get / Set"| configAccess
+    entry -->|"初始化、注册项调试、用户清理"| nvdmCore
+    product -->|"项目业务接口"| privateAccess
+    privateAccess -->|"通用读写"| nvdmCore
     configAccess -->|"字符串读写"| nvdmCore
-    nvdmCore -->|"查询、读、写、删除"| nvdmPort
+    nvdmCore -->|"查、读、写、删"| nvdmPort
     nvdmPort -->|"EasyFlash 接口"| easyFlash
-    easyFlash -->|"Flash 驱动"| envStore
+    easyFlash -->|"Flash 驱动读写"| envStore
 ```
 
-| 组件 | 职责与源码 |
+| 组件 | 职责与源码入口 |
 | --- | --- |
-| 配置访问 | [sonoff_nvdm_config.c](../sonoff/nvdm/sonoff_nvdm_config.c) 处理工厂/Matter 字段、License 和证书；[产品私有项](../project/onoff_plug/src/sonoff_private_item.c) 封装产品配置 |
-| NVDM 核心 | [sonoff_nvdm.c](../sonoff/nvdm/sonoff_nvdm.c) 维护注册表、默认值、通用读写和用户组清理 |
-| NVDM 适配 | [sonoff_nvdm_port.c](../sonoff/nvdm/sonoff_nvdm_port.c) 拼接 `group.key`，处理字符串结束符并转换错误码 |
+| 公共配置访问 | [sonoff_nvdm_config.c](../sonoff/nvdm/sonoff_nvdm_config.c) 处理工厂/Matter 字段、License、证书及业务校验 |
+| 私有配置访问 | [sonoff_private_item.h](../project/onoff_plug/inc/sonoff_private_item.h)、[sonoff_private_item.c](../project/onoff_plug/src/sonoff_private_item.c) 定义项目的 item、默认值和 Get/Set |
+| NVDM 核心 | [sonoff_nvdm.c](../sonoff/nvdm/sonoff_nvdm.c)、[sonoff_nvdm.h](../sonoff/nvdm/sonoff_nvdm.h) 提供注册表管理、默认值初始化、读写及清理 |
+| NVDM 适配 | [sonoff_nvdm_port.c](../sonoff/nvdm/sonoff_nvdm_port.c) 拼接键名、处理结束符并转换错误码 |
 | EasyFlash | [bk_ef.c](../bk_openthread/bk_idk/components/easy_flash/bk_ef.c) 对接 V4 Blob 接口；[ef_port.c](../bk_openthread/bk_idk/components/easy_flash/easy_flash_V4.X/port/ef_port.c) 提供 Flash 操作和锁 |
 
-NVDM 没有独立任务、事件队列或异步回调，也不维护一份完整的 RAM 配置副本。读写在调用者任务中执行，底层 EasyFlash 对单次 KV 操作加锁。
+存储操作在调用者任务中执行，EasyFlash 对单次 KV 操作加锁。多项业务更新仍是多次独立操作，不具备跨项事务保证。
 
-## 3. 初始化与默认值
+## 3. 数据格式与接口契约
 
-1. SDK 驱动初始化阶段调用 `easyflash_init()`，准备底层存储和锁。
-2. `sonoffEntry()` 调用 `snfNvdmInit()`，遍历三个组的静态注册表。
-3. 对每个键查询是否存在；存在则保留，查询返回非 0 时尝试写入默认值。任一写入失败即返回 `-1`。
+### 3.1 格式约定
 
-注册表由 `SnfNvdmItem` 和 `SnfNvdmItemTable` 描述，保存组名、键名、默认字符串及长度。它用于默认值初始化、通用 CLI 校验和用户项清理。
+NVDM 的通用接口按字符串使用：整数转为十进制文本，Matter 部分 ID 使用十六进制文本，证书与私钥使用 Base64；业务接口负责解析和解码。Base64 不提供存储加密，证书导入中的 ECDH/AES-GCM 属于传输接入流程。
 
-**初始化不检查已有值的业务合法性，也不覆盖已有空字符串。** 修改固件中的默认值不会自动更新已存数据；新增注册项会在下次初始化时补齐。存在性接口将“不存在”和“查询失败”都返回为负数，因此底层 EasyFlash 必须先初始化成功。
+工厂和 Matter 生产数据多数默认项为空或占位值。**配置项存在不代表内容有效，也不代表设备已具备授权或 Matter 配网条件。** 凭据字段映射见 [Matter 生产数据说明](../sonoff/nvdm/matter_factory_data.md)，License 业务见 [License 文档](license.md)。
 
-## 4. 读写流程与接口约束
-
-### 4.1 通用接口
-
-公共声明见 [sonoff_nvdm.h](../sonoff/nvdm/sonoff_nvdm.h)。
+### 3.2 公共接口
 
 | 接口 | 行为与返回值 |
 | --- | --- |
-| `snfNvdmReadStr(group, key, buff, len)` | 同步读取，`len` 是缓冲区容量；返回 `0/-1`，不返回实际长度 |
-| `snfNvdmWriteStr(group, key, value, len)` | 同步写入传入的 `len` 字节；字符串调用按 `strlen(value)+1` 传参；无需额外 Save |
-| `snfNvdmReadInt(group, key)` | 读字符串后调用 `atoi()`，直接返回整数或读取错误码 |
-| `snfNvdmWriteInt(group, key, value)` | 将整数格式化为十进制字符串后写入，返回 `0/-1` |
-| `snfNvdmCleanUserGroup()` | 逐项删除并写回用户注册项的默认值，返回 `0/-1` |
+| `snfNvdmInit()` | 检查注册项并补写缺失项默认值；返回 `0/-1` |
+| `snfNvdmReadStr(group, key, buff, len)` | `len` 是缓冲容量；返回 `0/-1`，不返回实际长度 |
+| `snfNvdmWriteStr(group, key, value, len)` | 同步写入指定字节；字符串按 `strlen(value)+1` 传参；无需额外 Save |
+| `snfNvdmReadInt(group, key)` | 字符串读取后调用 `atoi()`，直接返回整数或读取错误码 |
+| `snfNvdmWriteInt(group, key, value)` | 格式化为十进制字符串后写入；返回 `0/-1` |
+| `snfNvdmCleanUserGroup()` | 逐项删除并恢复已注册用户项默认值；返回 `0/-1` |
 
-写入接口不自动追加字符串结束符；调用者应提供包含结束符的有效数据。合成键名长度当前最多 **32 字节**，包含组名和中间的点号。
+合成键名最多 **32 字节**，包含组名和中间的点号。写入接口不自动追加结束符；读取缓冲不足时，当前实现截断数据、补 `\0`，仍可能返回成功，因此返回 `0` 不能证明内容完整。
 
-### 4.2 UML 时序：写入与读取
+`ReadInt()` 不能明确区分所有数值与错误：非法文本可能被 `atoi()` 解析成 `0`，负数可能与错误码重叠。业务需根据配置项的合法值域处理结果。
 
-以下展示通用字符串接口的正常路径。格式、范围和证书解码等业务处理由上层配置访问接口负责。
+## 4. 初始化与同步读写（UML）
+
+### 4.1 初始化规则
+
+SDK 先调用 `easyflash_init()` 初始化存储；随后 `sonoffEntry()` 调用 `snfNvdmInit()`，再执行生产数据检查和私有项目启动。
+
+```mermaid
+sequenceDiagram
+    participant sdk as SDK 初始化
+    participant storage as EasyFlash
+    participant entry as Sonoff 启动入口
+    participant core as NVDM 核心
+    participant port as NVDM 适配
+    sdk->>storage: easyflash_init()
+    entry->>core: snfNvdmInit()
+    loop user、factory、matter 注册项
+        core->>port: 查询 group.key 是否存在
+        alt 键存在
+            port-->>core: 0，保留已有值
+        else 不存在或查询失败
+            port-->>core: 非 0
+            core->>port: 写入默认字符串及结束符
+            port->>storage: 同步写入 KV
+            storage-->>port: 写入结果
+            port-->>core: 0 或 -1
+        end
+    end
+    core-->>entry: 全部完成返回 0，首个写入失败返回 -1
+```
+
+图中的循环在写入失败时提前结束。初始化不检查已有值的业务合法性，也不覆盖已有空字符串。修改默认值不会自动迁移已有数据；新增注册项会在下一次初始化补齐。存在性接口没有区分“键不存在”和“查询失败”。
+
+### 4.2 一次业务写入
 
 ```mermaid
 sequenceDiagram
     participant caller as 调用方
+    participant access as 公共 / 私有配置访问
     participant core as NVDM 核心
     participant port as NVDM 适配
     participant storage as EasyFlash
-    alt 写入
-        caller->>core: snfNvdmWriteStr(group, key, value, len)
-        core->>core: 校验指针和长度
-        core->>port: snfNvdmPortWriteStr(...)
-        port->>port: 拼接 group.key
-        port->>storage: bk_set_env_enhance → ef_set_env_blob
-        storage->>storage: 加锁、执行 KV 写入、解锁
-        storage-->>port: EfErrCode
-        port-->>core: 归一化为 0 或 -1
-        core-->>caller: 写入结果
-    else 读取
-        caller->>core: snfNvdmReadStr(group, key, buff, len)
-        core->>core: 校验指针和长度
-        core->>port: snfNvdmPortReadStr(...)
-        port->>port: 拼接 group.key，清零输出缓冲
-        port->>storage: bk_get_env_enhance → ef_get_env_blob
-        storage->>storage: 加锁、复制 KV 数据、解锁
-        storage-->>port: 实际复制长度
-        port->>port: 长度大于 0 时补字符串结束符
-        port-->>core: 0 或 -1
-        core-->>caller: 读取结果与输出缓冲
-    end
+    caller->>access: 业务 Set(value)
+    access->>access: 按该接口约定校验 / 编码
+    access->>core: snfNvdmWriteStr 或 snfNvdmWriteInt
+    core->>port: snfNvdmPortWriteStr(group, key, value, len)
+    port->>port: 拼接 group.key
+    port->>storage: bk_set_env_enhance / ef_set_env_blob
+    storage->>storage: 加锁、KV 写入、解锁
+    storage-->>port: EfErrCode
+    port-->>core: 归一化为 0 或 -1
+    core-->>access: 写入结果
+    access-->>caller: 业务结果
 ```
 
-读取缓冲区不足时，当前实现截断数据并在末尾补 `\0`，仍可能返回成功。调用者需按配置项最大长度分配缓冲区，不能用返回 `0` 判断内容完整。通用接口按字符串处理；Matter 二进制凭据应通过专用 Get 接口读取，映射见 [Matter 生产数据说明](../sonoff/nvdm/matter_factory_data.md)。
+读取沿相同分层返回：适配层先清零缓冲，再从 EasyFlash 读取并补结束符，配置访问层按字段约定解码。通用读写只做基本参数检查；并非每个私有 Get/Set 都已实现额外业务校验。
 
-## 5. 清理范围与产品扩展
+## 5. 私有项目扩展与掉电保持示例
 
-### 5.1 UML 时序：恢复用户默认值
+### 5.1 扩展方式
+
+`project/<项目名>/` 下每个子目录是一个私有项目，目前只有演示项目 `onoff_plug`。公共 [私有入口头文件](../sonoff/private/sonoff_private_device.h)和[产测头文件](../sonoff/private/sonoff_private_factory.h)规定每个项目必须实现的接口；具体 NVDM item 无法统一，`sonoff_private_item.h` 由项目自己提供。
+
+构建时将所选项目的 `src/`、`inc/` 接入公共应用组件。公共 NVDM 核心包含这个项目的 `sonoff_private_item.h`，通过以下宏展开私有注册项：
+
+| 项目提供内容 | 接入方式 |
+| --- | --- |
+| `SNF_PRIVATE_NVDM_USER_ITEM` | 用 `NVDM_USER_ITEM(键名, 默认字符串)` 扩展用户注册表 |
+| `SNF_PRIVATE_NVDM_FACTORY_ITEM` | 用 `NVDM_FAC_ITEM(键名, 默认字符串)` 扩展工厂注册表；没有条目时定义为空 |
+| 项目 Get/Set | 在私有源文件中调用通用 NVDM API，承载项目需要的值域校验和格式转换 |
+
+默认值宏使用 `sizeof` 记录长度，应传入字符串字面量。新增项注册后会自动参与初始化、注册项 CLI 和相应用户清理；普通通用读写允许访问未注册键，注册表不是通用访问白名单。
+
+### 5.2 `onoff_plug` 的状态保持时序
+
+该项目注册 `user.plug.onoff`，默认值为字符串 `"0"`。开关控制见 [sonoff_plug_handle.c](../project/onoff_plug/src/sonoff_plug_handle.c)，Matter 回调见 [DeviceCallbacks.cpp](../project/onoff_plug/matter/src/DeviceCallbacks.cpp)。
 
 ```mermaid
 sequenceDiagram
-    participant caller as 调用方
-    participant core as NVDM 核心
-    participant port as NVDM 适配
-    caller->>core: snfNvdmCleanUserGroup()
-    core->>core: 查找 user 注册表
-    loop 每个已注册用户项
-        core->>port: snfNvdmPortDelete(group, key)
-        port-->>core: 0，删除成功或键不存在
-        core->>port: snfNvdmPortWriteStr(默认值及长度)
-        port-->>core: 0
-    end
-    core-->>caller: 0
+    participant source as HTTP / Matter 控制
+    participant plug as 私有插座控制
+    participant item as 私有 NVDM 接口
+    participant storage as NVDM / EasyFlash
+    participant entry as 设备启动
+    participant matter as Matter 属性服务
+    source->>plug: HTTP 经 Set，Matter 回调经 RawSet
+    plug->>plug: 设置 GPIO20 输出
+    plug->>item: GPIO 设置成功后保存 onoff
+    item->>storage: 写 user.plug.onoff
+    storage-->>item: 写入结果
+    item-->>plug: 写入结果
+    entry->>entry: 掉电后重新启动，初始化 NVDM
+    entry->>plug: snfPrivateDeviceStart / snfPlugHandleInit
+    plug->>item: snfNvdmPlugOnOffGet()
+    item->>storage: 读 user.plug.onoff
+    storage-->>item: 读取结果
+    item-->>plug: 返回保存值或读取错误
+    plug->>plug: 值为 1 则开，其余值及读取失败则关
+    entry->>matter: 初始化 Matter 服务及属性表
+    matter->>plug: snfPlugOnOffGet()
+    plug-->>matter: 当前 GPIO 状态
+    matter->>matter: snfMatterOnOffReport，排队同步 OnOff 属性
 ```
 
-图示为成功路径。任一删除或写入失败立即返回 `-1`，已完成的项保留修改。它只遍历注册的 `user` 项，保留 `factory`、`matter` 组，也不会扫描删除未注册的 `user.*` 键。
+图示描述正常 GPIO 操作和存储路径。HTTP 的 `snfPlugOnOffSet()` 在设置后提交 Matter 属性更新；Matter 属性变化回调使用 `snfPlugOnOffRawSet()`，避免再次提交上报。启动同步位于 [chipinterface.cpp](../project/onoff_plug/matter/src/chipinterface.cpp) 的 `InitServer()`，在属性表初始化完成后读取当前 GPIO；上报接口返回成功只表示任务已提交。
+
+当前 `RawSet()` 调用保存接口但未检查保存返回值，故“GPIO 控制成功”仍不能保证“持久化成功”。Matter 的 `OnOff/StartUpOnOff` 还使用自身存储；启动时尝试以当时 GPIO 状态更新属性，并非两个存储区的事务同步。
+
+## 6. 清理范围与接手重点
 
 | 操作 | 影响范围 |
 | --- | --- |
-| `snfNvdmCleanUserGroup()` | 注册的用户项，包括产品扩展项，恢复默认值 |
+| `snfNvdmCleanUserGroup()` | 只遍历已注册 `user` 项，包括私有扩展项；逐项删除并写回默认值 |
 | `snfLicenseClear()` | 清空 License 的五个字段，保留序列号和授权码 |
-| `snfMatterCdClear()` / `snfMatterSecureCertClear()` | 分别清空 CD，或 DAC 证书、DAC 私钥和 PAI 证书 |
-| Matter 恢复出厂 | 当前实现擦除独立的 `matter`、`ot_setting` 分区并重启，未清理 NVDM 所在的 `easyflash` 分区 |
+| `snfMatterCdClear()` / `snfMatterSecureCertClear()` | 分别清空 CD，或 DAC 证书、DAC 私钥及 PAI 证书 |
+| Matter 恢复出厂 | 当前 [平台实现](../sonoff_modify/matter_modify/connectedhomeip/src/platform/Beken/ConfigurationManagerImpl.cpp) 擦除 `matter`、`ot_setting` 分区并重启，不清理 `easyflash` |
 
-产品新增配置时，在 [sonoff_private_item.h](../project/onoff_plug/inc/sonoff_private_item.h) 的 `SNF_PRIVATE_NVDM_USER_ITEM` 中用 `NVDM_USER_ITEM` 注册键名和默认值，再在产品源文件中提供 Get/Set 及必要的格式校验。现有 `test.item1` 可作为接入位置参考。
+用户清理不扫描未注册的 `user.*` 键，不影响 `factory/matter` 生产数据组；中途失败立即返回，之前完成的项不会回滚。清理 NVDM 也不会主动更新已经运行的 GPIO 或网络，调用方需安排重新应用配置。
 
-## 6. 当前实现边界
+接手时还需注意：
 
-- **注册表不是通用读写白名单。** 通用 `ReadStr/WriteStr` 可访问未注册键；CLI 的 `read/write` 只允许注册项，但直接使用通用接口，不执行专用业务校验。
-- **整数读取不能明确区分数值与错误。** `ReadInt()` 使用 `atoi()`，非法文本可能得到 `0`，负数值可能与错误码重叠；需严格校验时使用带输出参数的专用业务接口。
-- **多项操作没有事务保证。** License、证书写入和用户清理都是多次 KV 操作。部分业务包含读回校验或失败清空，但没有跨项事务锁和统一回滚；不能据单次 KV 加锁推断批量更新原子性。
-- **通用调试命令不适合确认长数据或隐私数据。** `show/read` 使用 512 字节缓冲并输出原文；长凭据可能截断。CLI `read/write` 的外层 `ret=0` 也不代表存储成功，具体失败由内部日志给出。
-
-本篇按 C4 的边界与组件关系组织架构说明，UML 时序图补充同步读写和清理行为；底层存储可靠性与断电恢复效果需结合板端测试确认。
+- 公共配置校验只由专用业务接口执行；CLI 的通用 `read/write` 校验注册项后直接访问存储，不经过这些业务校验。
+- 多字段 License、证书更新和用户清理没有跨项事务。部分接口有读回验证或失败清空，不能据单次 KV 加锁推断整组更新原子性。
+- 通用 `show/read` 用 512 字节缓冲并输出原文，长凭据可能截断；CLI 外层 `ret=0` 不代表底层存储成功，应结合内部结果日志判断。
+- 默认值、存储布局和调用链可由代码确认；掉电时的 Flash 行为及整条恢复链路需要板端验证。

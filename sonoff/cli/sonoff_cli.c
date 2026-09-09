@@ -549,7 +549,7 @@ static void atRestoreBase64Padding(char *base64, char *sha256)
  *
  * @param [out] uid - 唯一标识缓冲区.
  * @param [in] uid_size - 缓冲区长度.
- * @param [out] uid_len - 实际有效字节数, 固定为16, 前6字节为MAC其余补0.
+ * @param [out] uid_len - 实际有效字节数, 固定为16, 前6字节为OTP原始MAC其余补0.
  * @return 0表示成功, 负数表示失败.
  */
 static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
@@ -560,12 +560,7 @@ static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
     }
 
     memset(uid, 0, uid_size);
-    if (bk_get_mac(uid, MAC_TYPE_BASE) != BK_OK)
-    {
-        return -1;
-    }
-
-    if (BK_IS_ZERO_MAC(uid))
+    if (bk_get_original_mac(uid) != BK_OK)
     {
         return -1;
     }

@@ -625,6 +625,39 @@ bk_err_t bk_set_base_mac(const uint8_t *mac)
 }
 
 /* sonoff modify start */
+bk_err_t bk_get_original_mac(uint8_t *mac)
+{
+    bk_err_t ret = BK_ERR_NOT_SUPPORT;
+
+    if (mac == NULL)
+    {
+        return BK_ERR_NULL_PARAM;
+    }
+
+#if CONFIG_OTP && CONFIG_SOC_BK7239N
+    ret = bk_otp_ahb_read(OTP_MAC_ADDRESS1, mac, BK_MAC_ADDR_LEN);
+#endif
+    if (ret != BK_OK)
+    {
+        os_memset(mac, 0, BK_MAC_ADDR_LEN);
+        BK_LOGE(TAG, "read original mac failed(%d)\r\n", ret);
+        return ret;
+    }
+
+    if (BK_IS_ZERO_MAC(mac))
+    {
+        return BK_ERR_ZERO_MAC;
+    }
+
+    if (BK_IS_GROUP_MAC(mac))
+    {
+        os_memset(mac, 0, BK_MAC_ADDR_LEN);
+        return BK_ERR_GROUP_MAC;
+    }
+
+    return BK_OK;
+}
+
 bk_err_t bk_set_base_mac_ram(const uint8_t *mac)
 {
 	if (!mac)

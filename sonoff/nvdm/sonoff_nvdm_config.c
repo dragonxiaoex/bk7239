@@ -647,7 +647,7 @@ static int discriminatorIsValid(const char *value)
 /**
  * @brief 读取用于授权计算的16字节芯片明文.
  *
- * @param [out] plain - 16字节明文缓冲区, 前6字节为MAC, 其余补0.
+ * @param [out] plain - 16字节明文缓冲区, 前6字节为OTP原始MAC, 其余补0.
  * @param [in] plain_size - 缓冲区长度.
  * @return 0表示成功, 负数表示失败.
  */
@@ -659,12 +659,7 @@ static int activeCodeGetChipPlain(uint8_t *plain, uint16_t plain_size)
     }
 
     memset(plain, 0, NVDM_FACTORY_ACTIVE_CODE_LEN);
-    if (bk_get_mac(plain, MAC_TYPE_BASE) != BK_OK)
-    {
-        return -1;
-    }
-
-    if (BK_IS_ZERO_MAC(plain))
+    if (bk_get_original_mac(plain) != BK_OK)
     {
         return -1;
     }

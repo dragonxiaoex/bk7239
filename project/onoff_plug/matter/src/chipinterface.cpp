@@ -232,6 +232,14 @@ static void InitServer(intptr_t context)
     OTAHelpers::Instance().InitOTARequestor();
 #endif
     PrintOnboardingCodes(chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
+
+    /* sonoff modify start */
+    /* Matter 属性表就绪后，同步插座当前 GPIO 状态。 */
+    if (snfMatterOnOffReport(static_cast<uint8_t>(snfPlugOnOffGet())) != 0)
+    {
+        ChipLogError(DeviceLayer, "Schedule startup on/off report failed");
+    }
+    /* sonoff modify end */
 }
 extern "C" void matter_factory_reset(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv ){
     Server::GetInstance().ScheduleFactoryReset();
@@ -273,9 +281,6 @@ extern "C" void ChipTest(void)
 {
     ChipLogProgress(DeviceLayer, "on-off-plug!");
     CHIP_ERROR err = CHIP_NO_ERROR;
-    /* sonoff modify start */
-    snfPlugHandleInit();
-    /* sonoff modify end */
 
     // initPref();
     SetCommissionableDataProvider(&mFactoryDataProvider);
