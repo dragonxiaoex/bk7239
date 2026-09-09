@@ -28,7 +28,7 @@
 
 /* sonoff modify start */
 #include "sonoff_ota_matter.h"
-#include "sonoff_project_config.h"
+#include <cstdint>
 /* sonoff modify end */
 
 using namespace chip::System;
@@ -145,6 +145,12 @@ void OTAImageProcessorImpl::HandlePrepareDownload(intptr_t context)
     }
 
     ChipLogProgress(SoftwareUpdate, "%s [%d] OTA address space will be upgraded", __FUNCTION__, __LINE__);
+    /* sonoff modify start */
+    imageProcessor->readHeader = false;
+    imageProcessor->flash_data_offset = 0;
+    imageProcessor->mParams.downloadedBytes = 0;
+    imageProcessor->mParams.totalFileBytes = 0;
+    /* sonoff modify end */
     imageProcessor->mHeaderParser.Init(); // Initialize the status of OTA parse
     imageProcessor->mDownloader->OnPreparedForDownload(CHIP_NO_ERROR);
 }
@@ -212,157 +218,51 @@ void OTAImageProcessorImpl::HandleAbort(intptr_t context)
 void OTAImageProcessorImpl::HandleProcessBlock(intptr_t context)
 {
     auto * imageProcessor = reinterpret_cast<OTAImageProcessorImpl *>(context);
-    static uint32_t dw_flash_sector_addr = 0;
-
-    if (imageProcessor == nullptr)
+    if (imageProcessor == nullptr || imageProcessor->mDownloader == nullptr)
     {
-        ChipLogError(SoftwareUpdate, "ImageProcessor context is null");
-        return;
-    }
-    else if (imageProcessor->mDownloader == nullptr)
-    {
-        ChipLogError(SoftwareUpdate, "mDownloader is null");
         return;
     }
 
-    ByteSpan block = ByteSpan(imageProcessor->mBlock.data(), imageProcessor->mBlock.size());
-
+    ByteSpan block(imageProcessor->mBlock.data(), imageProcessor->mBlock.size());
     CHIP_ERROR error = imageProcessor->ProcessHeader(block);
     if (error != CHIP_NO_ERROR)
     {
-        ChipLogError(SoftwareUpdate, "Failed to process OTA image header");
         imageProcessor->mDownloader->EndDownload(error);
         return;
     }
 
-    if (!imageProcessor->readHeader) // First block received, process header
+    /* Matter头可跨多个块，也可能恰好占满当前块。 */
+    if (imageProcessor->mHeaderParser.IsInitialized() || block.empty())
     {
-        ota_data_struct_t * tempBuf = (ota_data_struct_t *) chip::Platform::MemoryAlloc(sizeof(ota_data_struct_t));
+        imageProcessor->mDownloader->FetchNextData();
+        return;
+    }
 
-        if (NULL == tempBuf)
+    if (!imageProcessor->readHeader)
+    {
+        if (header.mPayloadSize == 0 || header.mPayloadSize > UINT32_MAX)
         {
-            ChipLogError(SoftwareUpdate, "%s [%d] malloc failed  ", __FUNCTION__, __LINE__);
-            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_NO_MEMORY);
+            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_INVALID_ARGUMENT);
             return;
         }
-        memset((char *) tempBuf, 0, sizeof(ota_data_struct_t));
-        memcpy((char *) &(imageProcessor->pOtaTgtHdr), block.data(), sizeof(ota_data_struct_t));
 
-        imageProcessor->flash_data_offset = 0;
-
-        bk_read_ota_data_in_flash((char *) tempBuf, imageProcessor->flash_data_offset, sizeof(ota_data_struct_t));
-        ChipLogProgress(SoftwareUpdate, "Previous downloaded image version %s,date is %ld ", tempBuf->version, tempBuf->timestamp);
-        ChipLogProgress(SoftwareUpdate, "Previous downloaded size_raw %ld,size_package is %ld ", tempBuf->size_raw, tempBuf->size_package);
-        ChipLogProgress(SoftwareUpdate, "imageProcessor version %s,date is 0x%lx ", imageProcessor->pOtaTgtHdr.version,
-                        imageProcessor->pOtaTgtHdr.timestamp);
-
-#if 0
-        bk_logic_partition_t * partition_info   = NULL;
-        UINT32 dwFlagAddrOffset                 = 0;
-        char ucflag[(sizeof(ucFinishFlag) - 1)] = { 0 };
-
-#if CONFIG_FLASH_ORIGIN_API
-        partition_info = bk_flash_get_info(static_cast<bk_partition_t>(BK_PARTITION_OTA));
-#else
-        partition_info = bk_flash_partition_get_info(static_cast<bk_partition_t>(BK_PARTITION_OTA));
-#endif
-        BK_CHECK_POINTER_NULL_TO_VOID(partition_info);
-
-        dwFlagAddrOffset = partition_info->partition_length - (sizeof(ucFinishFlag) - 1);
-        bk_read_ota_data_in_flash((char *) ucflag, dwFlagAddrOffset, (sizeof(ucFinishFlag) - 1));
-        ChipLogProgress(SoftwareUpdate, "Block size is %d ,ucFinishFlag size len is %d", block.size(), sizeof(ucFinishFlag));
-
-        if ((0 == memcmp(ucflag, ucFinishFlag, (sizeof(ucFinishFlag) - 1))) &&
-            (0 == memcmp(tempBuf->version, imageProcessor->pOtaTgtHdr.version, sizeof(imageProcessor->pOtaTgtHdr.version))))
+        if (snfOtaMatterStart(static_cast<uint32_t>(header.mPayloadSize), header.mSoftwareVersion) != 0)
         {
-            chip::Platform::MemoryFree(tempBuf);
-            tempBuf = NULL;
-            ChipLogError(SoftwareUpdate, "The version is is the same as the previous version");
+            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_INCORRECT_STATE);
             return;
         }
-#endif
-        /* 不读ota分区的版本号，用当前固件的宏对比版本 */
-        if(strcmp(SONOFF_MATTER_SOFTWARE_VERSION_STRING, imageProcessor->pOtaTgtHdr.version) == 0) {
-            chip::Platform::MemoryFree(tempBuf);
-            tempBuf = NULL;
-            ChipLogError(SoftwareUpdate, "The version is is the same as the previous version");
-            return;
-        }
-
         imageProcessor->readHeader = true;
-
-        /* 启动升级，版本号先用测试的 */
-        if(snfOtaMatterStart(imageProcessor->pOtaTgtHdr.size_package + sizeof(ota_data_struct_t), 1) != 0)
-        {
-            chip::Platform::MemoryFree(tempBuf);
-            tempBuf = NULL;
-            ChipLogError(SoftwareUpdate, "snfOtaMatterStart failed %s [%d] ", __FUNCTION__, __LINE__);
-            return;
-        }
-
-        ChipLogProgress(SoftwareUpdate, "flash_data_offset is 0x%lx", imageProcessor->flash_data_offset);
-        if(snfOtaMatterWrite(imageProcessor->flash_data_offset, block.data(), block.size()) != 0)
-        {
-            chip::Platform::MemoryFree(tempBuf);
-            tempBuf = NULL;
-            ChipLogError(SoftwareUpdate, "snfOtaMatterWrite failed %s [%d] ", __FUNCTION__, __LINE__);
-            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_WRITE_FAILED);
-            return;
-        }
-#if 0
-        // Erase update partition
-        ChipLogProgress(SoftwareUpdate, "Erasing target partition...");
-        //bk_erase_ota_data_in_flash();
-        dw_flash_sector_addr = 0;
-
-        bk_erase_ota_data_in_flash_per_sector( dw_flash_sector_addr);//erase the first sector.
-        dw_flash_sector_addr += NAME_SPACE_FLASH_TOTAL_SIZE;
-
-        ChipLogProgress(SoftwareUpdate, "Erasing target partition...");
-
-        if (0 != bk_write_ota_data_to_flash((char *) block.data(), imageProcessor->flash_data_offset, block.size()))
-        {
-            chip::Platform::MemoryFree(tempBuf);
-            tempBuf = NULL;
-            ChipLogError(SoftwareUpdate, "bk_write_ota_data_to_flash failed %s [%d] ", __FUNCTION__, __LINE__);
-            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_WRITE_FAILED);
-            return;
-        }
-#endif
-
-        imageProcessor->flash_data_offset += block.size(); // count next write flash address
-
-        chip::Platform::MemoryFree(tempBuf);
-        tempBuf = NULL;
     }
-    else // received subsequent blocks
+
+    if (block.size() > UINT32_MAX ||
+        snfOtaMatterWrite(imageProcessor->flash_data_offset, block.data(), static_cast<uint32_t>(block.size())) != 0)
     {
-#if 0
-        while ( dw_flash_sector_addr < imageProcessor->flash_data_offset + block.size()) // If this number is an integer multiple of 4K
-        {
-            bk_erase_ota_data_in_flash_per_sector( dw_flash_sector_addr);//erase the sector.
-            dw_flash_sector_addr += NAME_SPACE_FLASH_TOTAL_SIZE;
-        }
-
-        if (0 != bk_write_ota_data_to_flash((char *) block.data(), imageProcessor->flash_data_offset, block.size()))
-        {
-            ChipLogError(SoftwareUpdate, "bk_write_ota_data_to_flash failed %s [%d] ", __FUNCTION__, __LINE__);
-            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_WRITE_FAILED);
-            return;
-        }
-#endif
-        if(snfOtaMatterWrite(imageProcessor->flash_data_offset, block.data(), block.size()) != 0)
-        {
-            ChipLogError(SoftwareUpdate, "snfOtaMatterWrite failed %s [%d] ", __FUNCTION__, __LINE__);
-            imageProcessor->mDownloader->EndDownload(CHIP_ERROR_WRITE_FAILED);
-            return;
-        }
-    
-        imageProcessor->flash_data_offset += block.size(); // count next write flash address
-
-        imageProcessor->size += block.size();
+        snfOtaMatterAbort();
+        imageProcessor->mDownloader->EndDownload(CHIP_ERROR_WRITE_FAILED);
+        return;
     }
 
+    imageProcessor->flash_data_offset += static_cast<uint32_t>(block.size());
     imageProcessor->mParams.downloadedBytes += block.size();
     imageProcessor->mDownloader->FetchNextData();
 }

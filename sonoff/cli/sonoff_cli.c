@@ -16,7 +16,6 @@
 #include <FreeRTOS.h>
 #include <semphr.h>
 #include <task.h>
-#include <components/system.h>
 
 #include "cli.h"
 
@@ -545,32 +544,6 @@ static void atRestoreBase64Padding(char *base64, char *sha256)
 }
 
 /**
- * @brief 读取主芯片唯一标识.
- *
- * @param [out] uid - 唯一标识缓冲区.
- * @param [in] uid_size - 缓冲区长度.
- * @param [out] uid_len - 实际有效字节数, 固定为16, 前6字节为OTP原始MAC其余补0.
- * @return 0表示成功, 负数表示失败.
- */
-static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
-{
-    if ((uid == NULL) || (uid_len == NULL) || (uid_size < NVDM_FACTORY_ACTIVE_CODE_LEN))
-    {
-        return -1;
-    }
-
-    memset(uid, 0, uid_size);
-    if (bk_get_original_mac(uid) != BK_OK)
-    {
-        return -1;
-    }
-
-    *uid_len = NVDM_FACTORY_ACTIVE_CODE_LEN;
-
-    return 0;
-}
-
-/**
  * @brief 处理AT+MASTER_CHIP_ID?查询命令.
  *
  * @param [in] pcWriteBuffer - CLI输出缓冲区.
@@ -580,10 +553,9 @@ static int atGetMasterChipId(uint8_t *uid, uint16_t uid_size, uint16_t *uid_len)
  */
 static void atMasterChipIdCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
 {
-    uint8_t uid[BUFF_SIZE_32];
-    char hex[BUFF_SIZE_32 * 2 + 1];
+    uint8_t uid[NVDM_FACTORY_CHIP_ID_LEN];
+    char hex[NVDM_FACTORY_CHIP_ID_LEN * 2 + 1];
     char value[BUFF_SIZE_128];
-    uint16_t uid_len;
     uint16_t i;
 
     (void)pcWriteBuffer;
@@ -595,14 +567,14 @@ static void atMasterChipIdCommand(char *pcWriteBuffer, int xWriteBufferLen, int 
         return;
     }
 
-    if (atGetMasterChipId(uid, sizeof(uid), &uid_len) != 0)
+    if (snfChipIdGet(uid, sizeof(uid)) != 0)
     {
         LOG_E(tag, "get master chip id failed");
         atPrintError(AT_CMD_MASTER_CHIP_ID);
         return;
     }
 
-    for (i = 0; i < uid_len; i++)
+    for (i = 0; i < NVDM_FACTORY_CHIP_ID_LEN; i++)
     {
         snprintf(&hex[i * 2], 3, "%02X", (unsigned int)uid[i]);
     }

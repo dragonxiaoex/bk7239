@@ -66,7 +66,7 @@ SDK 扩展的持久修改位于 `sonoff_modify/idk_modify/`。Makefile 构建时
 
 | 文件 | 内容 | 使用方 |
 | --- | --- | --- |
-| [security.csv](../build_tool/config/bk7239n/security.csv) | 安全启动、算法、Flash CRC/AES、公钥路径、签名器配置路径 | SDK 安全构建与打包 |
+| [security.csv](../build_tool/config/bk7239n/secure/security.csv) | 安全启动、算法、Flash CRC/AES、公钥路径、签名器配置路径 | SDK 安全构建与打包 |
 | [aws_kms_signer.json](../build_tool/sign/aws_kms_signer.json) | provider、完整 Key ARN、region、profile、公钥文件路径 | `AwsKmsKey` |
 | [aws_kms_public.pem](../build_tool/sign/aws_kms_public.pem) | KMS 公钥的 PEM 副本 | 构建端验签、镜像公钥 TLV、公钥头文件生成 |
 | [sonoff_trusted_pubkey.h](../sonoff_modify/idk_modify/components/bk_mcuboot/bl2/components/mcuboot/src/sonoff_trusted_pubkey.h) | `TRUSTED_PUBKEY_DER` 固定公钥数组 | BL2 的 `bk_find_key()` |
@@ -167,7 +167,7 @@ BL1 需要的平台 manifest 格式由 `secure_boot_tool` 负责生成，KMS 适
 
 ## 5. 签名产物与 OTA 层次
 
-生成关系由 [pack.json](../build_tool/config/bk7239n/pack.json)、[PackBl2sign](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_bl2_sign.py) 和 [PackRawOta](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_raw_ota.py) 定义。
+生成关系由 [pack.json](../build_tool/config/bk7239n/secure/pack.json)、[PackBl2sign](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_bl2_sign.py) 和 [PackRawOta](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_raw_ota.py) 定义。
 
 | 产物 | 内容与用途 | 验证方 |
 | --- | --- | --- |
@@ -277,7 +277,7 @@ CONFIG_ANTI_ROLLBACK=n
 
 `security.csv` 配置 `bl1_secureboot_en=TRUE`、`flash_crc_en=TRUE`、`flash_aes_type=NONE`、`img_sign_key_type=ec256`，公钥和签名器路径分别指向 `aws_kms_public.pem` 与 `aws_kms_signer.json`。
 
-[ota.csv](../build_tool/config/bk7239n/ota.csv) 设置 `strategy=OVERWRITE`、`encrypt=FALSE`、`bootloader_ota=FALSE`；[bin.csv](../build_tool/config/bk7239n/bin.csv) 只声明 `bl2.bin` 和 `cpu0_app.bin`。镜像打包版本与安全计数器应按这两份文件核对，不能将应用的 Matter 版本字段直接当作签名镜像版本。
+[ota.csv](../build_tool/config/bk7239n/secure/ota.csv) 设置 `strategy=OVERWRITE`、`encrypt=FALSE`、`bootloader_ota=FALSE`；[bin.csv](../build_tool/config/bk7239n/secure/bin.csv) 只声明 `bl2.bin` 和 `cpu0_app.bin`。镜像打包版本与安全计数器应按这两份文件核对，不能将应用的 Matter 版本字段直接当作签名镜像版本。
 
 ### 7.2 环境、身份与公钥准备
 
@@ -308,7 +308,7 @@ BL2 公钥头文件已经存在，正常构建无需重新生成。初次生成�
 在已准备好 Python 环境和 AWS profile 的终端，从项目根目录执行：
 
 ```bash
-make -C build_tool MODEL=onoff_plug SOC=bk7239n
+make -C build_tool MODEL=onoff_plug SE=1 SOC=bk7239n
 ```
 
 默认产物目录是 `build/bk7239n/onoff_plug/package/`。打包时自动执行 KMS 签名，不需要手工向镜像末尾追加签名，也不需要单独运行分步摘要回填命令。

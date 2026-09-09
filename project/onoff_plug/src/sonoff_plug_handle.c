@@ -51,10 +51,10 @@ int snfPlugOnOffSet(uint8_t onoff)
         return -1;
     }
 
-    if (snfMatterOnOffReport(onoff) != 0)
+    /* if (snfMatterOnOffReport(onoff) != 0)
     {
         return -1;
-    }
+    } */
 
     return 0;
 }

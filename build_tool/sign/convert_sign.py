@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description='Generate the BL2 trusted public ke
 parser.add_argument('--replace', action='store_true', help='Replace the existing trusted public key header')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
-with (root / 'build_tool/config/bk7239n/security.csv').open() as config:
+with (root / 'build_tool/config/bk7239n/secure/security.csv').open() as config:
     settings = dict(list(csv.reader(config))[1:])
 source = Path(settings['img_sign_pubkey'])
 target = root / 'sonoff_modify/idk_modify/components/bk_mcuboot/bl2/components/mcuboot/src/sonoff_trusted_pubkey.h'

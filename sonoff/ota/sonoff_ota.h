@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_OTA_SONOFF_OTA_H__
-#define __SONOFF_OTA_SONOFF_OTA_H__
+#ifndef __SONOFF_OTA_H__
+#define __SONOFF_OTA_H__
 
 #include <stdint.h>
 
@@ -20,12 +20,12 @@ extern "C" {
 /**
  * @brief OTA接口返回值.
  */
-#define SNF_OTA_OK                     (0)      /* 成功 */
-#define SNF_OTA_ERR_INVALID_PARAM      (-1)     /* 参数错误 */
-#define SNF_OTA_ERR_STATE              (-2)     /* 状态错误 */
-#define SNF_OTA_ERR_BUSY               (-3)     /* 接口忙 */
-#define SNF_OTA_ERR_QUEUE_FULL         (-4)     /* 事件队列已满 */
-#define SNF_OTA_ERR_NO_MEMORY          (-5)     /* 资源不足 */
+#define SNF_OTA_OK                     (0)  /* 成功 */
+#define SNF_OTA_ERR_INVALID_PARAM      (-1) /* 参数错误 */
+#define SNF_OTA_ERR_STATE              (-2) /* 状态错误 */
+#define SNF_OTA_ERR_BUSY               (-3) /* 接口忙 */
+#define SNF_OTA_ERR_QUEUE_FULL         (-4) /* 事件队列已满 */
+#define SNF_OTA_ERR_NO_MEMORY          (-5) /* 资源不足 */
 
 /**
  * @brief OTA任务状态.
@@ -57,6 +57,7 @@ typedef enum
 typedef enum
 {
     SNF_OTA_CIPHER_NONE = 0, /**< 镜像未加密. */
+    SNF_OTA_CIPHER_AES_256_GCM = 1, /**< AES-256-GCM加密，由包头指定. */
 } SnfOtaCipherType;
 
 /**
@@ -74,21 +75,34 @@ typedef enum
     SNF_OTA_ERROR_CHECK_FAILED, /**< 镜像校验失败. */
     SNF_OTA_ERROR_APPLY_FAILED, /**< 设置启动分区失败. */
     SNF_OTA_ERROR_ABORTED, /**< OTA被中止. */
+    SNF_OTA_ERROR_FILE_NOT_FOUND, /**< 带封装的OTA包中未找到目标文件. */
+    SNF_OTA_ERROR_DECRYPT_FAILED, /**< 解密或认证标签校验失败. */
 } SnfOtaErrorCode;
 
 /** @brief 镜像校验值最大长度. */
 #define SNF_OTA_CHECK_VALUE_SIZE       (32U)
+
+/** @brief 带封装的OTA包目标文件约定. */
+#define SNF_OTA_FILE_NAME_SIZE         32        /* 文件名字段长度 */
+#define SNF_OTA_DEFAULT_FILE_NAME      "ota.bin" /* 封装内目标文件名 */
+
+/** @brief OTA输入格式. */
+typedef enum
+{
+    SNF_OTA_FORMAT_RAW = 0,     /**< 直接写入镜像. */
+    SNF_OTA_FORMAT_PACKAGE,     /**< 公司外层OTA包，解析后原样写入所选文件. */
+} SnfOtaFormat;
 
 /**
  * @brief 镜像信息.
  */
 typedef struct
 {
-    uint32_t size; /**< 镜像字节长度. */
-    uint32_t version; /**< 镜像版本. */
-    uint8_t check_type; /**< 镜像校验类型. */
+    uint32_t size;                           /**< 输入总长度，PACKAGE格式包含公司封装，不含Matter头. */
+    uint32_t version;                        /**< 镜像版本. */
+    uint8_t check_type;                      /**< 镜像校验类型. */
     uint8_t check[SNF_OTA_CHECK_VALUE_SIZE]; /**< 镜像校验值, 格式由check_type定义. */
-    uint8_t cipher_type; /**< 镜像加密类型. */
+    uint8_t cipher_type;                     /**< 入口传NONE，带封装包的加密类型由元数据头指定. */
 } SnfOtaImageInfo;
 
 /**
@@ -96,10 +110,10 @@ typedef struct
  */
 typedef struct
 {
-    uint32_t received_size; /**< 已接收镜像字节长度. */
-    uint32_t total_size; /**< 镜像总字节长度. */
-    uint8_t percent; /**< 接收进度, 范围为0到100. */
-    uint8_t error_code; /**< 事件错误码. */
+    uint32_t received_size; /**< 已成功处理的输入长度，包括包头和跳过的文件. */
+    uint32_t total_size;    /**< 输入包总长度，与Start的size一致. */
+    uint8_t percent;        /**< 接收进度, 范围为0到100. */
+    uint8_t error_code;     /**< 事件错误码. */
 } SnfOtaEventData;
 
 /**
@@ -118,9 +132,27 @@ typedef void (*SnfOtaEventCallback)(SnfOtaState state,
  */
 typedef struct
 {
-    SnfOtaImageInfo image_info; /**< 镜像信息. */
-    SnfOtaEventCallback event_callback; /**< OTA状态事件回调. */
+    SnfOtaImageInfo image_info;                 /**< 镜像信息. */
+    SnfOtaEventCallback event_callback;         /**< OTA状态事件回调. */
+    SnfOtaFormat format;                        /**< 输入格式，零初始化保持原有RAW模式. */
+    char file_name[SNF_OTA_FILE_NAME_SIZE + 1]; /**< PACKAGE目标文件名，首字节非0，完整复制前32字节. */
 } SnfOtaConfig;
+
+/**
+ * @brief 判断OTA状态是否为失败终态.
+ *
+ * @param [in] state - OTA状态.
+ * @return -1表示失败或中止, 0表示其他状态.
+ */
+int snfOtaStateIsFailed(SnfOtaState state);
+
+/**
+ * @brief 判断OTA状态是否仍在执行中, 包含升级成功后等待重启的状态.
+ *
+ * @param [in] state - OTA状态.
+ * @return 1表示正在执行, 0表示未执行或已结束.
+ */
+uint8_t snfOtaStateIsActive(SnfOtaState state);
 
 /**
  * @brief 启动OTA任务.
@@ -136,7 +168,7 @@ int snfOtaStart(const SnfOtaConfig *ota_config);
  * data不会被模块复制，调用者必须保持其内容不变，直到收到本段数据对应的
  * 状态回调。数据必须按offset递增、无间隙地提交。
  *
- * @param [in] offset - 镜像内偏移量.
+ * @param [in] offset - 输入包内偏移量，包含由核心处理的各层包头.
  * @param [in] data - 待写入数据.
  * @param [in] len - 数据长度.
  * @return 0表示请求成功，负数表示请求未发送.
@@ -163,4 +195,4 @@ int snfOtaAbort(void);
 }
 #endif
 
-#endif /* __SONOFF_OTA_SONOFF_OTA_H__ */
+#endif /* __SONOFF_OTA_H__ */

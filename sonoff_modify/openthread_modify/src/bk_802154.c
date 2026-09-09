@@ -572,6 +572,12 @@ bk_err_t bk_ieee802154_enable(void)
     lw_mac802154_lw_macl_register_isr_pl(macl_cb);
 
     s_802154_state = BK_802154_STATE_IDLE;
+    /* sonoff modify start */
+#if CONFIG_WIFI_THREAD_COEX_EN
+    /* 通知共存逻辑 Thread 射频已就绪，允许 Wi-Fi 使用射频时退出 Thread 模式。 */
+    vOpenthreadSetStartStatus(true);
+#endif
+    /* sonoff modify end */
     return BK_OK;
 }
 
@@ -579,6 +585,12 @@ bk_err_t bk_ieee802154_disable(void)
 {
     mac802154_mac_deinit();
     s_802154_state = BK_802154_STATE_DISABLE;
+    /* sonoff modify start */
+#if CONFIG_WIFI_THREAD_COEX_EN
+    /* Thread 停止后，Wi-Fi 释放射频时不再切回 Thread 模式。 */
+    vOpenthreadSetStartStatus(false);
+#endif
+    /* sonoff modify end */
     return BK_OK;
 }
 

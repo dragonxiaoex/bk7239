@@ -37,7 +37,7 @@ AT+LICENSE_DELETE	删除 License
 AT+MASTER_CHIP_ID?\r\n
 
 功能描述：
-通过 `bk_get_original_mac()` 读取芯片 OTP 原始 MAC，拼成 16 字节 UID（前 6 字节为原始 MAC，后 10 字节补 0），以大写十六进制输出。前缀固定为 `BK723x`。授权码明文与该 UID 相同，不受 License 或运行时 BASE MAC 覆盖影响。OTP 读取失败、MAC 全零或为组播/广播地址时返回 ERROR，不使用 Flash、随机或默认 MAC 代替。
+读取 PUF UID 前 16 字节（128 bit），以大写十六进制输出。前缀固定为 `BK723x`。授权码明文与该 UID 相同，不受 License 或运行时 BASE MAC 覆盖影响。UID 读取失败或全零时返回 ERROR，不使用 MAC、Flash、随机或默认值代替。
 
 返回参数：
 ● 1、正常返回：AT+MASTER_CHIP_ID=BK723x-<32位大写HEX>\r\n
@@ -45,8 +45,7 @@ AT+MASTER_CHIP_ID?\r\n
 
 示例
 发送: AT+MASTER_CHIP_ID?\r\n
-响应: AT+MASTER_CHIP_ID=BK723x-D02700FFED2A00000000000000000000\r\n
-（对应 OTP 原始 MAC `d0:27:00:ff:ed:2a`）
+响应: AT+MASTER_CHIP_ID=BK723x-<32位大写HEX>\r\n
 
 查询固件版本 — AT+FW_VER?
 
@@ -289,7 +288,7 @@ AT+MT_SECURE_CERT_DELETE\r\n
 AT+ACTIVE_CODE=<32位HEX>\r\n
 
 功能描述：
-写入本机授权码。设备用 AES-128-ECB 校验该码是否由本机 ChipID 算出，匹配才落盘。密钥为 `soNoFF22soNoFF22`。明文与 `AT+MASTER_CHIP_ID?` 的 16 字节 UID 相同：OTP 原始 MAC 6 字节 + 10 字节 0。密文 16 字节转成 32 位十六进制即为授权码。此指令操作 FLASH。
+写入本机授权码。设备用 AES-128-ECB 校验该码是否由本机 ChipID 算出，匹配才落盘。密钥为 `soNoFF22soNoFF22`。明文与 `AT+MASTER_CHIP_ID?` 的 16 字节 UID 相同：PUF UID 前 16 字节。密文 16 字节转成 32 位十六进制即为授权码。此指令操作 FLASH。
 
 返回参数：
 ● 1、正常返回：AT+ACTIVE_CODE=OK\r\n

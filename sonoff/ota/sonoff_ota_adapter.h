@@ -8,14 +8,22 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_OTA_SONOFF_OTA_ADAPTER_H__
-#define __SONOFF_OTA_SONOFF_OTA_ADAPTER_H__
+#ifndef __SONOFF_OTA_ADAPTER_H__
+#define __SONOFF_OTA_ADAPTER_H__
 
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * @brief 获取OTA暂存分区容量
+ *
+ * @param [out] size - 分区容量.
+ * @return 0表示成功，负数表示失败.
+ */
+int32_t snfOtaAdapterGetSize(uint32_t *size);
 
 /**
  * @brief 擦除OTA目标分区中的数据.
@@ -62,4 +70,4 @@ void snfOtaAdapterReboot(void);
 }
 #endif
 
-#endif /* __SONOFF_OTA_SONOFF_OTA_ADAPTER_H__ */
+#endif /* __SONOFF_OTA_ADAPTER_H__ */

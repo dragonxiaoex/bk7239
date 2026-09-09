@@ -35,6 +35,7 @@
  */
 static const bk_logic_partition_t *otaAdapterGetPartition(void)
 {
+
     return bk_flash_partition_get_info(SNF_OTA_TARGET_PARTITION);
 }
 
@@ -59,6 +60,20 @@ static int otaAdapterCheckRange(uint32_t offset, uint32_t size)
     {
         return -1;
     }
+
+    return 0;
+}
+
+int32_t snfOtaAdapterGetSize(uint32_t *size)
+{
+    const bk_logic_partition_t *partition = otaAdapterGetPartition();
+
+    if ((partition == NULL) || (size == NULL))
+    {
+        return -1;
+    }
+
+    *size = partition->partition_length;
 
     return 0;
 }
@@ -132,8 +147,8 @@ int snfOtaAdapterSetBootPartition(void)
 #endif
 #else
     /*
-     * 当前适配使用BK_PARTITION_OTA作为bootloader的暂存镜像分区。
-     * 若平台使用独立的启动控制分区，应在本函数中写入对应启动标志。
+     * 普通bootloader在重启后检查BK_PARTITION_OTA中的RBL头，无需BL2确认标志。
+     * 文件内容已原样写入OTA分区，内部格式由bootloader处理。
      */
 
     return 0;

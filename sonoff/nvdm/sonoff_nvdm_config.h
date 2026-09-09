@@ -44,6 +44,7 @@ extern "C" {
 
 /** @brief 工厂配置项长度. */
 #define NVDM_FACTORY_SERIAL_NUMBER_LEN      14      /* 产品识别码十进制数字长度 */
+#define NVDM_FACTORY_CHIP_ID_LEN            16      /* PUF UID前128bit */
 #define NVDM_FACTORY_ACTIVE_CODE_LEN        16      /* 授权码二进制长度 */
 #define NVDM_FACTORY_ACTIVE_CODE_HEX_LEN    32      /* 授权码十六进制字符串长度 */
 #define NVDM_FACTORY_BASE_MAC_LEN           6       /* BASE MAC二进制长度 */
@@ -96,6 +97,17 @@ int snfSerialNumberGet(char *serial_number, uint16_t serial_number_size);
 int snfSerialNumberSet(const char *serial_number);
 
 /**
+ * @brief 读取芯片唯一ID.
+ *
+ * 取PUF UID前16字节, 不受License或运行时BASE MAC覆盖影响.
+ *
+ * @param [out] chip_id - 至少16字节的缓冲区.
+ * @param [in] chip_id_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示读取失败或全零.
+ */
+int snfChipIdGet(uint8_t *chip_id, uint16_t chip_id_size);
+
+/**
  * @brief 读取设备授权码.
  *
  * @param [out] active_code - 授权码缓冲区, 需能容纳32位十六进制和结束符.
@@ -117,7 +129,7 @@ int snfActiveCodeSet(const char *active_code);
 /**
  * @brief 检查当前芯片是否已授权.
  *
- * 明文为芯片唯一ID的16字节AES块: OTP原始MAC的6字节加10字节0, 不受BASE MAC覆盖影响.
+ * 明文为PUF UID前16字节的AES-128-ECB密文, 不受BASE MAC覆盖影响.
  *
  * @return 0表示已授权, 负数表示未授权或校验失败.
  */

@@ -23,12 +23,12 @@
 
 static const char *tag = "SNF-OTA-HTTP";
 
-#define SNF_OTA_HTTP_UPLOAD_PATH            "/cgi/ota_upload"       /* OTA上传请求路径 */
-#define SNF_OTA_HTTP_HEADER_BUFFER_SIZE     (1024)                  /* HTTP请求头缓存大小 */
-#define SNF_OTA_HTTP_DATA_BUFFER_SIZE       (1024)                  /* HTTP数据缓存大小 */
-#define SNF_OTA_HTTP_WAIT_TIMEOUT_MS        (30000)                 /* OTA处理等待超时 */
-#define SNF_OTA_HTTP_WAIT_INTERVAL_MS       (5)                     /* OTA状态轮询间隔 */
-#define SNF_OTA_HTTP_HEADER_END_SIZE        (4)                     /* 请求头结束标记长度 */
+#define SNF_OTA_HTTP_UPLOAD_PATH            "/cgi/ota_upload" /* OTA上传请求路径 */
+#define SNF_OTA_HTTP_HEADER_BUFFER_SIZE     (1024)            /* HTTP请求头缓存大小 */
+#define SNF_OTA_HTTP_DATA_BUFFER_SIZE       (1024)            /* HTTP数据缓存大小 */
+#define SNF_OTA_HTTP_WAIT_TIMEOUT_MS        (30000)           /* OTA处理等待超时 */
+#define SNF_OTA_HTTP_WAIT_INTERVAL_MS       (5)               /* OTA状态轮询间隔 */
+#define SNF_OTA_HTTP_HEADER_END_SIZE        (4)               /* 请求头结束标记长度 */
 
 /** @brief OTA HTTP运行状态. */
 typedef struct
@@ -88,6 +88,7 @@ static size_t otaHttpFindHeaderEnd(const char *data, size_t data_size)
  */
 static int otaHttpIsSpace(char value)
 {
+
     return ((value == ' ') || (value == '\t')) ? 1 : 0;
 }
 
@@ -305,48 +306,6 @@ static int otaHttpWriteResponse(char *response,
 }
 
 /**
- * @brief 判断OTA状态是否为失败终态.
- *
- * @param [in] state - OTA状态.
- * @return -1表示失败终态, 0表示其他状态.
- */
-static int otaHttpStateIsFailed(SnfOtaState state)
-{
-    if ((state == SNF_OTA_STATE_FAILED)
-        || (state == SNF_OTA_STATE_VERIFY_FAILED)
-        || (state == SNF_OTA_STATE_ABORT))
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
-/**
- * @brief 判断OTA状态是否仍在执行中.
- *
- * @param [in] state - OTA状态.
- * @return 1表示正在执行, 0表示已结束.
- */
-static uint8_t otaHttpStateIsActive(SnfOtaState state)
-{
-    switch (state)
-    {
-        case SNF_OTA_STATE_RECEIVING:
-        case SNF_OTA_STATE_VERIFY_SUCCESS:
-        case SNF_OTA_STATE_APPLY:
-        case SNF_OTA_STATE_SUCCESS:
-            return 1;
-        case SNF_OTA_STATE_IDLE:
-        case SNF_OTA_STATE_VERIFY_FAILED:
-        case SNF_OTA_STATE_ABORT:
-        case SNF_OTA_STATE_FAILED:
-        default:
-            return 0;
-    }
-}
-
-/**
  * @brief 等待一段镜像数据完成写入.
  *
  * @param [in] expected_size - 期望已写入长度.
@@ -357,35 +316,35 @@ static int otaHttpWaitWrite(uint32_t expected_size)
     SnfHttpOtaState *ota_state = &http_ota_state;
     TickType_t start_tick = xTaskGetTickCount();
 
-    while ((xTaskGetTickCount() - start_tick) < SNF_OTA_HTTP_WAIT_TIMEOUT_MS)
+    while ((xTaskGetTickCount() - start_tick) < pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_TIMEOUT_MS))
     {
         if (ota_state->received_size >= expected_size)
         {
-            return 0;
+            return snfOtaStateIsFailed(ota_state->state);
         }
 
-        if (otaHttpStateIsFailed(ota_state->state) != 0)
+        if (snfOtaStateIsFailed(ota_state->state) != 0)
         {
             return -1;
         }
 
-        vTaskDelay(SNF_OTA_HTTP_WAIT_INTERVAL_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_INTERVAL_MS));
     }
 
     return -1;
 }
 
 /**
- * @brief 等待OTA镜像校验完成.
+ * @brief 等待OTA镜像校验及应用完成.
  *
  * @return 0表示成功, 负数表示失败.
  */
-static int otaHttpWaitForVerify(void)
+static int otaHttpWaitForComplete(void)
 {
     SnfHttpOtaState *ota_state = &http_ota_state;
     TickType_t start_tick = xTaskGetTickCount();
 
-    while ((xTaskGetTickCount() - start_tick) < SNF_OTA_HTTP_WAIT_TIMEOUT_MS)
+    while ((xTaskGetTickCount() - start_tick) < pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_TIMEOUT_MS))
     {
         SnfOtaState state = ota_state->state;
 
@@ -394,12 +353,12 @@ static int otaHttpWaitForVerify(void)
             return 0;
         }
 
-        if (otaHttpStateIsFailed(state) != 0)
+        if (snfOtaStateIsFailed(state) != 0)
         {
             return -1;
         }
 
-        vTaskDelay(SNF_OTA_HTTP_WAIT_INTERVAL_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_INTERVAL_MS));
     }
 
     return -1;
@@ -412,7 +371,7 @@ static void otaHttpAbort(void)
     TickType_t start_tick;
     int ret;
 
-    if (otaHttpStateIsActive(ota_state->state) == 0)
+    if (snfOtaStateIsActive(ota_state->state) == 0)
     {
         return;
     }
@@ -426,10 +385,10 @@ static void otaHttpAbort(void)
 
     start_tick = xTaskGetTickCount();
 
-    while ((otaHttpStateIsActive(ota_state->state) != 0)
-           && ((xTaskGetTickCount() - start_tick) < SNF_OTA_HTTP_WAIT_TIMEOUT_MS))
+    while ((snfOtaStateIsActive(ota_state->state) != 0)
+        && ((xTaskGetTickCount() - start_tick) < pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_TIMEOUT_MS)))
     {
-        vTaskDelay(SNF_OTA_HTTP_WAIT_INTERVAL_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SNF_OTA_HTTP_WAIT_INTERVAL_MS));
     }
 }
 
@@ -538,30 +497,13 @@ static int otaHttpStart(uint32_t image_size)
     ota_state->error_code = SNF_OTA_ERROR_NONE;
 
     ota_config.image_info.size = image_size;
+    ota_config.format = SNF_OTA_FORMAT_PACKAGE;
+    memcpy(ota_config.file_name, SNF_OTA_DEFAULT_FILE_NAME, sizeof(SNF_OTA_DEFAULT_FILE_NAME));
     ota_config.image_info.check_type = SNF_OTA_CHECK_NONE;
     ota_config.image_info.cipher_type = SNF_OTA_CIPHER_NONE;
     ota_config.event_callback = otaHttpEventCallback;
 
     return snfOtaStart(&ota_config);
-}
-
-/**
- * @brief 限制上传连接的TCP接收窗口, 使对端按设备写入速度停等.
- *
- * @param [in] client_socket - HTTP客户端套接字.
- */
-static void otaHttpLimitRecvWindow(int client_socket)
-{
-    int recv_buffer_size = SNF_OTA_HTTP_DATA_BUFFER_SIZE;
-
-    if (lwip_setsockopt(client_socket,
-                        SOL_SOCKET,
-                        SO_RCVBUF,
-                        &recv_buffer_size,
-                        sizeof(recv_buffer_size)) != 0)
-    {
-        LOG_I(tag, "set SO_RCVBUF failed");
-    }
 }
 
 /**
@@ -630,7 +572,7 @@ static int otaHttpWriteData(uint32_t offset, const uint8_t *data, uint32_t len)
 /**
  * @brief 接收并写入完整HTTP OTA消息体.
  *
- * 写完一段flash后再收取下一段, 配合缩小后的TCP窗口让对端停等.
+ * 写完一段flash后再收取下一段.
  *
  * @param [in] client_socket - HTTP客户端套接字.
  * @param [in] initial_data - 请求头缓存中已有的消息体数据.
@@ -685,7 +627,7 @@ static int otaHttpReceiveImage(int client_socket,
         written_size += chunk_size;
     }
 
-    return otaHttpWaitForVerify();
+    return otaHttpWaitForComplete();
 }
 
 int snfOtaHttpIsUploadRequest(const char *request, size_t request_size)

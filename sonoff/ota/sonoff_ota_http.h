@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_OTA_SONOFF_OTA_HTTP_H__
-#define __SONOFF_OTA_SONOFF_OTA_HTTP_H__
+#ifndef __SONOFF_OTA_HTTP_H__
+#define __SONOFF_OTA_HTTP_H__
 
 #include <stddef.h>
 
@@ -63,4 +63,4 @@ int snfOtaHttpGetProgress(const char *query,
 }
 #endif
 
-#endif /* __SONOFF_OTA_SONOFF_OTA_HTTP_H__ */
+#endif /* __SONOFF_OTA_HTTP_H__ */

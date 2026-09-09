@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include <FreeRTOS.h>
-#include <components/system.h>
+#include <components/bk_uid.h>
 
 #include "cJSON.h"
 #include "mbedtls/aes.h"
@@ -645,29 +645,6 @@ static int discriminatorIsValid(const char *value)
 }
 
 /**
- * @brief 读取用于授权计算的16字节芯片明文.
- *
- * @param [out] plain - 16字节明文缓冲区, 前6字节为OTP原始MAC, 其余补0.
- * @param [in] plain_size - 缓冲区长度.
- * @return 0表示成功, 负数表示失败.
- */
-static int activeCodeGetChipPlain(uint8_t *plain, uint16_t plain_size)
-{
-    if ((plain == NULL) || (plain_size < NVDM_FACTORY_ACTIVE_CODE_LEN))
-    {
-        return -1;
-    }
-
-    memset(plain, 0, NVDM_FACTORY_ACTIVE_CODE_LEN);
-    if (bk_get_original_mac(plain) != BK_OK)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
-/**
  * @brief 使用固定密钥对16字节明文做AES-ECB加密.
  *
  * @param [in] plain - 16字节明文.
@@ -721,7 +698,7 @@ static int activeCodeMatchesChip(const char *active_code)
         return -1;
     }
 
-    if (activeCodeGetChipPlain(plain, sizeof(plain)) != 0)
+    if (snfChipIdGet(plain, sizeof(plain)) != 0)
     {
         return -1;
     }
@@ -939,6 +916,43 @@ int snfSerialNumberSet(const char *serial_number)
     }
 
     return 0;
+}
+
+int snfChipIdGet(uint8_t *chip_id, uint16_t chip_id_size)
+{
+    uint8_t uid[32];
+    uint16_t i;
+
+    if ((chip_id == NULL) || (chip_id_size < NVDM_FACTORY_CHIP_ID_LEN))
+    {
+        return -1;
+    }
+
+    if (bk_uid_driver_init() != BK_OK)
+    {
+        LOG_E(tag, "chip id uid init failed");
+        return -1;
+    }
+
+    memset(uid, 0, sizeof(uid));
+    if (bk_uid_get_data(uid) != BK_OK)
+    {
+        LOG_E(tag, "chip id uid get failed");
+        return -1;
+    }
+
+    memcpy(chip_id, uid, NVDM_FACTORY_CHIP_ID_LEN);
+    for (i = 0; i < NVDM_FACTORY_CHIP_ID_LEN; i++)
+    {
+        if (chip_id[i] != 0)
+        {
+            return 0;
+        }
+    }
+
+    LOG_E(tag, "chip id empty");
+
+    return -1;
 }
 
 int snfActiveCodeGet(char *active_code, uint16_t active_code_size)

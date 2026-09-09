@@ -22,7 +22,7 @@ NVDM 为用户配置、工厂信息和 Matter 生产数据提供统一的持久�
 
 三个 NVDM 组共享一个 EasyFlash 存储区，通过键名前缀区分，不是三个物理分区。`group="user"`、`key="plug.onoff"` 合成为 `user.plug.onoff`。**NVDM 的** `matter` **组与独立的** `matter` **分区用途不同，清理范围也不同。**
 
-当前 [分区配置](../build_tool/config/bk7239n/partitions.csv) 为 EasyFlash 预留 **16 KiB**；构建应用 [项目覆盖配置 ef_cfg.h](../sonoff_modify/idk_modify/components/easy_flash/easy_flash_V4.X/inc/ef_cfg.h) 后，`ENV_AREA_SIZE` 同为 **16 KiB**。SDK 原文件仍可能显示 8 KiB，应以覆盖后的构建配置为准。可用载荷小于分区容量，需要留出元数据和垃圾回收空间；起始地址由 SDK 查询 `BK_PARTITION_EASYFLASH` 获取。
+当前 [分区配置](../build_tool/config/bk7239n/normal/auto_partitions.csv) 为 EasyFlash 预留 **16 KiB**；构建应用 [项目覆盖配置 ef_cfg.h](../sonoff_modify/idk_modify/components/easy_flash/easy_flash_V4.X/inc/ef_cfg.h) 后，`ENV_AREA_SIZE` 同为 **16 KiB**。SDK 原文件仍可能显示 8 KiB，应以覆盖后的构建配置为准。可用载荷小于分区容量，需要留出元数据和垃圾回收空间；起始地址由 SDK 查询 `BK_PARTITION_EASYFLASH` 获取。
 
 ## 2. 组件职责与依赖
 

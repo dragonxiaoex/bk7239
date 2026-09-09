@@ -20,17 +20,18 @@
 #include "sonoff_log.h"
 #include "sonoff_ota.h"
 #include "sonoff_ota_adapter.h"
+#include "sonoff_ota_parse.h"
 #include "sonoff_task_def.h"
 
 static const char *tag = "SNF-OTA";
 
-#define SNF_OTA_EVENT_QUEUE_LENGTH          (10)            /* OTA事件队列长度 */
-#define SNF_OTA_DATA_TIMEOUT_MS             (20000)         /* 单次等待镜像数据超时时间 */
-#define SNF_OTA_MAX_TIMEOUT_COUNT           (3)             /* 最大连续超时次数 */
-#define SNF_OTA_ERASE_SECTOR_SIZE           (4 * 1024)      /* OTA擦除sector大小 */
-#define SNF_OTA_ERASE_YIELD_MS              (10)            /* 擦除后让出调度, 避免WiFi丢beacon */
-#define SNF_OTA_WRITE_YIELD_MS              (1)             /* 每段写入后让出调度, 便于TCP应答 */
-#define SNF_OTA_REBOOT_DELAY_MS             (2000)          /* 应用成功后的重启延时 */
+#define SNF_OTA_EVENT_QUEUE_LENGTH          (10)       /* OTA事件队列长度 */
+#define SNF_OTA_DATA_TIMEOUT_MS             (20000)    /* 单次等待镜像数据超时时间 */
+#define SNF_OTA_MAX_TIMEOUT_COUNT           (3)        /* 最大连续超时次数 */
+#define SNF_OTA_ERASE_SECTOR_SIZE           (4 * 1024) /* OTA擦除sector大小 */
+#define SNF_OTA_ERASE_YIELD_MS              (10)       /* 擦除后让出调度, 避免WiFi丢beacon */
+#define SNF_OTA_WRITE_YIELD_MS              (1)        /* 每段写入后让出调度, 便于TCP应答 */
+#define SNF_OTA_REBOOT_DELAY_MS             (2000)     /* 应用成功后的重启延时 */
 
 /** @brief OTA任务内部事件. */
 typedef enum
@@ -56,17 +57,18 @@ typedef struct
     QueueHandle_t event_queue;
     SemaphoreHandle_t mutex;
     SnfOtaConfig config;
+    SnfOtaParseContext parser;
 } SnfOtaControl;
 
 /** @brief OTA任务运行信息. */
 typedef struct
 {
     volatile SnfOtaState state;
-    volatile uint32_t total_size;               /* 镜像总长度. */
-    volatile uint32_t received_size;            /* 已接收数据长度. */
-    volatile uint32_t queued_size;              /* 已入队列数据长度. */
-    volatile uint32_t next_erase_offset;        /* 下次擦除偏移量. */
-    volatile uint8_t timeout_count;             /* 超时计数. */
+    volatile uint32_t total_size;        /* 镜像总长度. */
+    volatile uint32_t received_size;     /* 已接收数据长度. */
+    volatile uint32_t queued_size;       /* 已入队列数据长度. */
+    volatile uint32_t next_erase_offset; /* 下次擦除偏移量. */
+    volatile uint8_t timeout_count;      /* 超时计数. */
 } SnfOtaInfo;
 
 /** @brief OTA任务运行控制块实例. */
@@ -171,6 +173,7 @@ static void otaClearSessionLocked(void)
     SnfOtaInfo *info = &ota_info;
 
     memset(&control->config, 0, sizeof(SnfOtaConfig));
+    snfOtaParseFree(&control->parser);
     memset(info, 0, sizeof(SnfOtaInfo));
     info->state = SNF_OTA_STATE_IDLE;
     control->task_handle = NULL;
@@ -218,7 +221,7 @@ static void otaNotify(SnfOtaState state, SnfOtaErrorCode error_code)
     event_data.received_size = info->received_size;
     event_data.total_size = info->total_size;
     event_data.percent = otaCalculatePercent(event_data.received_size,
-                                                 event_data.total_size);
+                                             event_data.total_size);
     event_data.error_code = (uint8_t)error_code;
     callback = control->config.event_callback;
 
@@ -226,17 +229,6 @@ static void otaNotify(SnfOtaState state, SnfOtaErrorCode error_code)
     {
         callback(state, &event_data);
     }
-}
-
-/**
- * @brief 预留镜像扩展校验接口.
- *
- * @param [in] image_info - 镜像信息.
- * @return OTA错误码, SNF_OTA_ERROR_NONE表示成功.
- */
-static SnfOtaErrorCode otaVerifyReserved(const SnfOtaImageInfo *image_info)
-{
-    return SNF_OTA_ERROR_UNSUPPORTED;
 }
 
 /**
@@ -252,14 +244,12 @@ static SnfOtaErrorCode otaVerifyImage(const SnfOtaImageInfo *image_info)
         return SNF_OTA_ERROR_INVALID_PARAM;
     }
 
-    switch (image_info->check_type)
+    if (image_info->check_type == SNF_OTA_CHECK_NONE)
     {
-        case SNF_OTA_CHECK_NONE:
-            return SNF_OTA_ERROR_NONE;
-        case SNF_OTA_CHECK_SHA256:
-        default:
-            return otaVerifyReserved(image_info);
+        return SNF_OTA_ERROR_NONE;
     }
+
+    return SNF_OTA_ERROR_UNSUPPORTED;
 }
 
 /**
@@ -305,9 +295,9 @@ static SnfOtaErrorCode otaEraseBeforeWrite(uint32_t offset, uint32_t size)
  * @brief 擦除必要sector并写入一段OTA数据.
  *
  * @param [in] event - 镜像数据事件.
- * @return 0表示成功, -1表示写入失败.
+ * @return OTA错误码，区分擦除失败和写入失败.
  */
-static int otaEarseAndWrite(const SnfOtaEvent *event)
+static SnfOtaErrorCode otaEraseAndWrite(const SnfOtaEvent *event)
 {
     SnfOtaErrorCode error_code;
 
@@ -315,19 +305,67 @@ static int otaEarseAndWrite(const SnfOtaEvent *event)
     if (error_code != SNF_OTA_ERROR_NONE)
     {
         LOG_I(tag, "erase failed");
-        return -1;
+        return error_code;
     }
 
     if (snfOtaAdapterWrite(event->offset, event->data, event->size) != 0)
     {
         LOG_I(tag, "write failed");
-        return -1;
+        return SNF_OTA_ERROR_WRITE_FAILED;
     }
 
-    return 0;
+    return SNF_OTA_ERROR_NONE;
 }
 
-/** @brief 处理OTA镜像校验. */
+/**
+ * @brief 解析升级包并将有效载荷送入现有擦写流程
+ *
+ * @param [in] event - 包含公司外层包头的输入数据事件.
+ * @return OTA错误码.
+ */
+static SnfOtaErrorCode otaHandlePackage(const SnfOtaEvent *event)
+{
+    SnfOtaControl *control = &ota_control;
+    uint32_t offset = 0;
+    uint32_t consumed;
+    SnfOtaPayload payload = {0};
+    SnfOtaEvent image_event = {0};
+    SnfOtaErrorCode error;
+
+    while (offset < event->size)
+    {
+        error = snfOtaParseData(&control->parser, &event->data[offset], event->size - offset,
+                                &consumed, &payload);
+        if (error != SNF_OTA_ERROR_NONE)
+        {
+            LOG_I(tag, "OTA parse failed: offset=%lu, error=%u",
+                  (unsigned long)control->parser.offset, (unsigned int)error);
+            return error;
+        }
+
+        if (payload.size != 0)
+        {
+            image_event.offset = payload.offset;
+            image_event.data = payload.data;
+            image_event.size = payload.size;
+            error = otaEraseAndWrite(&image_event);
+            if (error != SNF_OTA_ERROR_NONE)
+            {
+                return error;
+            }
+        }
+
+        offset += consumed;
+    }
+
+    return SNF_OTA_ERROR_NONE;
+}
+
+/**
+ * @brief 处理OTA镜像校验.
+ *
+ * @return 0表示继续处理事件, -1表示结束OTA任务.
+ */
 static int otaHandleVerify(void)
 {
     SnfOtaControl *control = &ota_control;
@@ -341,7 +379,15 @@ static int otaHandleVerify(void)
         return -1;
     }
 
-    error_code = otaVerifyImage(&control->config.image_info);
+    if (control->config.format == SNF_OTA_FORMAT_PACKAGE)
+    {
+        error_code = snfOtaParseFinish(&control->parser);
+    }
+    else
+    {
+        error_code = otaVerifyImage(&control->config.image_info);
+    }
+
     if (error_code != SNF_OTA_ERROR_NONE)
     {
         otaNotify(SNF_OTA_STATE_VERIFY_FAILED, error_code);
@@ -357,11 +403,14 @@ static int otaHandleVerify(void)
  * @brief 处理OTA镜像数据事件.
  *
  * @param [in] event - 镜像数据事件.
+ * @return 0表示继续处理事件, -1表示结束OTA任务.
  */
 static int otaHandleData(const SnfOtaEvent *event)
 {
     SnfOtaInfo *info = &ota_info;
+    SnfOtaControl *control = &ota_control;
     uint32_t image_size = info->total_size;
+    SnfOtaErrorCode error_code;
 
     if (info->state != SNF_OTA_STATE_RECEIVING)
     {
@@ -398,10 +447,19 @@ static int otaHandleData(const SnfOtaEvent *event)
         return -1;
     }
 
-    if (otaEarseAndWrite(event) != 0)
+    if (control->config.format == SNF_OTA_FORMAT_PACKAGE)
+    {
+        error_code = otaHandlePackage(event);
+    }
+    else
+    {
+        error_code = otaEraseAndWrite(event);
+    }
+
+    if (error_code != SNF_OTA_ERROR_NONE)
     {
         LOG_I(tag, "write and check failed");
-        otaNotify(SNF_OTA_STATE_FAILED, SNF_OTA_ERROR_WRITE_FAILED);
+        otaNotify(SNF_OTA_STATE_FAILED, error_code);
         return -1;
     }
 
@@ -416,7 +474,11 @@ static int otaHandleData(const SnfOtaEvent *event)
     return otaHandleVerify();
 }
 
-/** @brief 处理OTA应用事件. */
+/**
+ * @brief 处理OTA应用事件.
+ *
+ * @return 重启接口返回时, 0表示应用成功, -1表示应用失败并结束OTA任务.
+ */
 static int otaHandleApply(void)
 {
     otaNotify(SNF_OTA_STATE_APPLY, SNF_OTA_ERROR_NONE);
@@ -429,10 +491,15 @@ static int otaHandleApply(void)
     otaNotify(SNF_OTA_STATE_SUCCESS, SNF_OTA_ERROR_NONE);
     vTaskDelay(pdMS_TO_TICKS(SNF_OTA_REBOOT_DELAY_MS));
     snfOtaAdapterReboot();
+
     return 0;
 }
 
-/** @brief 处理OTA中止事件. */
+/**
+ * @brief 处理OTA中止事件.
+ *
+ * @return -1表示结束OTA任务.
+ */
 static int otaHandleAbort(void)
 {
     otaNotify(SNF_OTA_STATE_ABORT, SNF_OTA_ERROR_ABORTED);
@@ -440,7 +507,11 @@ static int otaHandleAbort(void)
     return -1;
 }
 
-/** @brief 处理镜像接收超时. */
+/**
+ * @brief 处理镜像接收超时.
+ *
+ * @return 0表示继续等待, -1表示结束OTA任务.
+ */
 static int otaHandleTimeout(void)
 {
     SnfOtaInfo *info = &ota_info;
@@ -477,13 +548,11 @@ static void otaTask(void *arg)
     SnfOtaControl *control = &ota_control;
     SnfOtaInfo *info = &ota_info;
     SnfOtaEvent event = {0};
-    TickType_t wait_ticks = 0;
     int ret = 0;
 
     while (ret == 0)
     {
-        wait_ticks = SNF_OTA_DATA_TIMEOUT_MS / portTICK_PERIOD_MS;
-        if (xQueueReceive(control->event_queue, &event, wait_ticks) != pdPASS)
+        if (xQueueReceive(control->event_queue, &event, pdMS_TO_TICKS(SNF_OTA_DATA_TIMEOUT_MS)) != pdPASS)
         {
             ret = otaHandleTimeout();
         }
@@ -526,10 +595,36 @@ static void otaTask(void *arg)
     vTaskDelete(NULL);
 }
 
+int snfOtaStateIsFailed(SnfOtaState state)
+{
+    if ((state == SNF_OTA_STATE_FAILED)
+        || (state == SNF_OTA_STATE_VERIFY_FAILED)
+        || (state == SNF_OTA_STATE_ABORT))
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+uint8_t snfOtaStateIsActive(SnfOtaState state)
+{
+    if ((state == SNF_OTA_STATE_RECEIVING)
+        || (state == SNF_OTA_STATE_VERIFY_SUCCESS)
+        || (state == SNF_OTA_STATE_APPLY)
+        || (state == SNF_OTA_STATE_SUCCESS))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
 int snfOtaStart(const SnfOtaConfig *ota_config)
 {
     SnfOtaControl *control = &ota_control;
     SnfOtaInfo *info = &ota_info;
+    uint32_t flash_size;
     int ret;
 
     if ((ota_config == NULL) || (ota_config->image_info.size == 0))
@@ -541,6 +636,17 @@ int snfOtaStart(const SnfOtaConfig *ota_config)
     if (ota_config->image_info.cipher_type != SNF_OTA_CIPHER_NONE)
     {
         LOG_I(tag, "unsupported OTA cipher type: %u", ota_config->image_info.cipher_type);
+        return SNF_OTA_ERR_INVALID_PARAM;
+    }
+
+    if ((ota_config->format != SNF_OTA_FORMAT_RAW) && (ota_config->format != SNF_OTA_FORMAT_PACKAGE))
+    {
+        return SNF_OTA_ERR_INVALID_PARAM;
+    }
+
+    if ((ota_config->format == SNF_OTA_FORMAT_PACKAGE)
+        && (ota_config->image_info.check_type != SNF_OTA_CHECK_NONE))
+    {
         return SNF_OTA_ERR_INVALID_PARAM;
     }
 
@@ -567,10 +673,32 @@ int snfOtaStart(const SnfOtaConfig *ota_config)
         return SNF_OTA_ERR_BUSY;
     }
 
+    if (snfOtaAdapterGetSize(&flash_size) != 0)
+    {
+        otaUnlock();
+        return SNF_OTA_ERR_STATE;
+    }
+
+    if ((ota_config->format == SNF_OTA_FORMAT_RAW) && (ota_config->image_info.size > flash_size))
+    {
+        otaUnlock();
+        return SNF_OTA_ERR_INVALID_PARAM;
+    }
+
+    if (ota_config->format == SNF_OTA_FORMAT_PACKAGE)
+    {
+        if (snfOtaParseInit(&control->parser, ota_config->image_info.size, ota_config->file_name,
+                            flash_size) != SNF_OTA_ERROR_NONE)
+        {
+            otaUnlock();
+            return SNF_OTA_ERR_INVALID_PARAM;
+        }
+    }
+
     if (control->event_queue == NULL)
     {
         control->event_queue = xQueueCreate(SNF_OTA_EVENT_QUEUE_LENGTH,
-                                             sizeof(SnfOtaEvent));
+                                            sizeof(SnfOtaEvent));
         if (control->event_queue == NULL)
         {
             LOG_I(tag, "event queue init failed");

@@ -1,5 +1,6 @@
 # Build from this directory:
 #   make MODEL=onoff_plug
+#   make MODEL=onoff_plug SE=1
 #   make MODEL=onoff_plug SOC=bk7239n
 #   make MODEL=onoff_plug SOC=bk7239n menuconfig
 #   make MODEL=onoff_plug clean
@@ -16,7 +17,18 @@ IDK_OVERLAY     := $(OVERLAY_ROOT)/idk_modify
 MATTER_OVERLAY  := $(OVERLAY_ROOT)/matter_modify
 OPENTHREAD_OVERLAY := $(OVERLAY_ROOT)/openthread_modify
 ADAPTER_OVERLAY := $(OVERLAY_ROOT)/adapter_modify
+SE              ?= 0
+ifeq ($(SE),1)
+BUILD_VARIANT   := secure
+BUILD_DIR       := $(ROOT)/build/secure
+OTA_INPUT_NAME  := ota_raw.bin
+else ifeq ($(SE),0)
+BUILD_VARIANT   := normal
 BUILD_DIR       := $(ROOT)/build
+OTA_INPUT_NAME  := app_pack.rbl
+else
+$(error SE must be 0 or 1)
+endif
 CHIP_DIR        := $(SDK_DIR)/components/matter/connectedhomeip
 OPENTHREAD_DIR  := $(SDK_DIR)/components/openthread
 
@@ -24,6 +36,8 @@ COMMON_CMAKE    := $(BUILD_TOOL_DIR)/CMakeLists.txt
 COMMON_CONFIG   := $(BUILD_TOOL_DIR)/config
 COMMON_MATTER   := $(BUILD_TOOL_DIR)/matter
 PRODUCT_CMAKE   := $(BUILD_TOOL_DIR)/product/CMakeLists.txt
+OTA_PACK_TOOL   := $(BUILD_TOOL_DIR)/ota/pack_ota.py
+OTA_KEY_HEADER  := $(ROOT)/sonoff/ota/sonoff_ota_key.h
 
 SOC             ?= bk7239n
 
@@ -36,15 +50,20 @@ endif
 SONOFF_DIR       := $(ROOT)/sonoff
 PROJECT_SRC     := $(ROOT)/project/$(MODEL)
 PROJECT_DIR     := $(BUILD_DIR)/project_tree/$(MODEL)
+MODE_CONFIG_DIR := $(COMMON_CONFIG)/$(SOC)/$(BUILD_VARIANT)
+PROJECT_CONFIG_DIR := $(PROJECT_DIR)/config/$(SOC)
 
-.PHONY: all build menuconfig clean restore help apply_overlay
+.PHONY: all build menuconfig clean restore help apply_overlay prepare_project ota_package
 
 all: build
 
 help:
 	@echo ""
-	@echo "  make MODEL=<name>              build project (default SOC=$(SOC))"
+	@echo "  make MODEL=<name>              build normal firmware (default SOC=$(SOC))"
+	@echo "  make MODEL=<name> SE=1         build secure firmware under build/secure"
 	@echo "  make MODEL=<name> SOC=bk7239n  build for a specific SoC"
+	@echo "  build also creates package/ota_encrypted.bin using sonoff_ota_key.h"
+	@echo "  make MODEL=<name> [SE=1] ota_package wrap app_pack.rbl (normal) or ota_raw.bin (secure)"
 	@echo "  make MODEL=<name> menuconfig   configure project (default SOC=$(SOC))"
 	@echo "  make MODEL=<name> clean        remove that project's build output"
 	@echo "  make restore                   restore bk_openthread / bk_idk via git"
@@ -85,7 +104,10 @@ endef
 define assemble_project
 	mkdir -p "$(PROJECT_DIR)/matter/third_party" "$(PROJECT_DIR)/components/main"; \
 	ln -sfn "$(COMMON_CMAKE)" "$(PROJECT_DIR)/CMakeLists.txt"; \
-	ln -sfn "$(COMMON_CONFIG)" "$(PROJECT_DIR)/config"; \
+	if [ -L "$(PROJECT_DIR)/config" ]; then rm "$(PROJECT_DIR)/config"; fi; \
+	mkdir -p "$(PROJECT_CONFIG_DIR)"; \
+	cp -f "$(MODE_CONFIG_DIR)"/* "$(PROJECT_CONFIG_DIR)/"; \
+	cat "$(COMMON_CONFIG)/$(SOC)/config" "$(MODE_CONFIG_DIR)/config" > "$(PROJECT_CONFIG_DIR)/config"; \
 	ln -sfn "$(PRODUCT_CMAKE)" "$(PROJECT_DIR)/components/main/CMakeLists.txt"; \
 	ln -sfn "$(SONOFF_DIR)" "$(PROJECT_DIR)/components/main/sonoff"; \
 	if [ -d "$(PROJECT_SRC)/src" ]; then \
@@ -120,6 +142,10 @@ define check_layout
 		echo "missing $(COMMON_CONFIG)"; \
 		exit 1; \
 	fi; \
+	if [ ! -f "$(MODE_CONFIG_DIR)/config" ]; then \
+		echo "missing mode configuration: $(MODE_CONFIG_DIR)/config"; \
+		exit 1; \
+	fi; \
 	if [ ! -f "$(COMMON_MATTER)/BUILD.gn" ]; then \
 		echo "missing $(COMMON_MATTER)/BUILD.gn"; \
 		exit 1; \
@@ -136,31 +162,40 @@ apply_overlay:
 restore:
 	@$(call restore_sdk)
 
-build:
+prepare_project:
+	@set -e; \
+	$(call check_layout); \
+	$(call assemble_project)
+
+ota_package:
+	@python3 "$(OTA_PACK_TOOL)" pack \
+		--key-header "$(OTA_KEY_HEADER)" \
+		--input "$(BUILD_DIR)/$(SOC)/$(MODEL)/package/$(OTA_INPUT_NAME)" \
+		--output "$(BUILD_DIR)/$(SOC)/$(MODEL)/package/ota_encrypted.bin" \
+		--version-header "$(PROJECT_SRC)/inc/sonoff_project_config.h"
+
+build: prepare_project
 	@set -e; \
 	restore() { $(call restore_sdk); }; \
 	trap restore EXIT; \
-	$(call check_layout); \
-	$(call assemble_project); \
 	$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR)); \
 	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
 	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
 	$(call overlay_copy,$(ADAPTER_OVERLAY),$(SDK_DIR)/components/adapter); \
-	echo "[sonoff] MODEL=$(MODEL) SOC=$(SOC)"; \
+	echo "[sonoff] MODEL=$(MODEL) SOC=$(SOC) SE=$(SE) ($(BUILD_VARIANT))"; \
 	echo "[sonoff] PROJECT_DIR=$(PROJECT_DIR)"; \
 	export SONOFF_ROOT="$(ROOT)"; \
 	export MODEL="$(MODEL)"; \
 	$(MAKE) -C "$(SDK_DIR)" $(SOC) \
 		PROJECT="$(MODEL)" \
 		PROJECT_DIR="$(PROJECT_DIR)" \
-		BUILD_DIR="$(BUILD_DIR)"
+		BUILD_DIR="$(BUILD_DIR)"; \
+	$(MAKE) -f "$(BUILD_TOOL_DIR)/Makefile" MODEL="$(MODEL)" SOC="$(SOC)" SE="$(SE)" ota_package
 
-menuconfig:
+menuconfig: prepare_project
 	@set -e; \
 	restore() { $(call restore_sdk); }; \
 	trap restore EXIT; \
-	$(call check_layout); \
-	$(call assemble_project); \
 	$(call overlay_copy,$(IDK_OVERLAY),$(IDK_DIR)); \
 	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
 	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
@@ -177,8 +212,8 @@ menuconfig:
 
 clean:
 ifeq ($(MODEL),)
-	@echo "rm -rf $(BUILD_DIR)"
-	@rm -rf "$(BUILD_DIR)"
+	@echo "rm -rf $(BUILD_DIR)/$(SOC) $(BUILD_DIR)/project_tree"
+	@rm -rf "$(BUILD_DIR)/$(SOC)" "$(BUILD_DIR)/project_tree"
 else
 	@echo "rm -rf $(BUILD_DIR)/$(SOC)/$(MODEL) $(BUILD_DIR)/project_tree/$(MODEL)"
 	@rm -rf "$(BUILD_DIR)/$(SOC)/$(MODEL)" "$(BUILD_DIR)/project_tree/$(MODEL)"

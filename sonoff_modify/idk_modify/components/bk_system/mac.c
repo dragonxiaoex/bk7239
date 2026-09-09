@@ -634,24 +634,45 @@ bk_err_t bk_get_original_mac(uint8_t *mac)
         return BK_ERR_NULL_PARAM;
     }
 
+    os_memset(mac, 0, BK_MAC_ADDR_LEN);
+
 #if CONFIG_OTP && CONFIG_SOC_BK7239N
-    ret = bk_otp_ahb_read(OTP_MAC_ADDRESS1, mac, BK_MAC_ADDR_LEN);
-#endif
+    uint8_t otp_mac[8];
+
+    ret = bk_otp_driver_init();
     if (ret != BK_OK)
     {
-        os_memset(mac, 0, BK_MAC_ADDR_LEN);
+        BK_LOGE(TAG, "original mac otp init failed(%d)\r\n", ret);
+        return ret;
+    }
+
+    os_memset(otp_mac, 0, sizeof(otp_mac));
+    ret = bk_otp_ahb_read(OTP_MAC_ADDRESS1, otp_mac, sizeof(otp_mac));
+    if (ret != BK_OK)
+    {
         BK_LOGE(TAG, "read original mac failed(%d)\r\n", ret);
         return ret;
     }
 
-    if (BK_IS_ZERO_MAC(mac))
+    os_memcpy(mac, otp_mac, BK_MAC_ADDR_LEN);
+#else
+    BK_LOGE(TAG, "read original mac failed(%d)\r\n", ret);
+    return ret;
+#endif
+
+    if (BK_IS_ZERO_MAC(mac)
+        || ((mac[0] == 0xFF) && (mac[1] == 0xFF) && (mac[2] == 0xFF)
+            && (mac[3] == 0xFF) && (mac[4] == 0xFF) && (mac[5] == 0xFF)))
     {
+        os_memset(mac, 0, BK_MAC_ADDR_LEN);
+        BK_LOGE(TAG, "original mac empty\r\n");
         return BK_ERR_ZERO_MAC;
     }
 
     if (BK_IS_GROUP_MAC(mac))
     {
         os_memset(mac, 0, BK_MAC_ADDR_LEN);
+        BK_LOGE(TAG, "original mac is group mac\r\n");
         return BK_ERR_GROUP_MAC;
     }
 

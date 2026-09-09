@@ -12,7 +12,6 @@
 #include <string.h>
 
 #include <FreeRTOS.h>
-#include <semphr.h>
 #include <task.h>
 
 #include "sonoff_log.h"
@@ -22,8 +21,8 @@
 /** @brief Matter OTA日志标签. */
 static const char *tag = "SNF-OTA-MT";
 
-#define SNF_OTA_MATTER_WAIT_INTERVAL_MS     (5)             /* 状态轮询间隔 */
-#define SNF_OTA_MATTER_WAIT_TIMEOUT_MS      (20000)         /* 单次写入等待超时 */
+#define SNF_OTA_MATTER_WAIT_INTERVAL_MS     (5)     /* 状态轮询间隔 */
+#define SNF_OTA_MATTER_WAIT_TIMEOUT_MS      (20000) /* 单次写入等待超时 */
 
 /** @brief Matter OTA运行状态. */
 typedef struct
@@ -49,15 +48,15 @@ static SnfMatterOtaState matter_ota_state = {
 static void otaMatterEventCallback(SnfOtaState state,
                                    const SnfOtaEventData *event_data)
 {
-
     SnfMatterOtaState *ota_state = &matter_ota_state;
+
     ota_state->state = state;
     if (event_data != NULL)
     {
         ota_state->received_size = event_data->received_size;
     }
 
-    if((ota_state->state == SNF_OTA_STATE_RECEIVING)
+    if ((ota_state->state == SNF_OTA_STATE_RECEIVING)
         && (ota_state->percent != event_data->percent))
     {
         ota_state->percent = event_data->percent;
@@ -76,65 +75,29 @@ static void otaMatterEventCallback(SnfOtaState state,
 }
 
 /**
- * @brief 判断OTA状态是否为失败终态.
+ * @brief 等待一段Matter镜像数据完成写入.
  *
- * @param [in] state - OTA状态.
- * @return -1表示失败终态, 0表示其他状态.
+ * @param [in] expected_size - 期望已写入长度.
+ * @return 0表示写入完成, -1表示失败或等待超时.
  */
-static int otaMatterStateIsFailed(SnfOtaState state)
-{
-    if ((state == SNF_OTA_STATE_FAILED)
-        || (state == SNF_OTA_STATE_VERIFY_FAILED)
-        || (state == SNF_OTA_STATE_ABORT))
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
-/**
- * @brief 判断OTA状态是否仍在执行中.
- *
- * @param [in] state - OTA状态.
- * @return 1表示正在执行, 0表示已结束.
- */
-static uint8_t otaMatterStateIsActive(SnfOtaState state)
-{
-    switch (state)
-    {
-        case SNF_OTA_STATE_RECEIVING:
-        case SNF_OTA_STATE_VERIFY_SUCCESS:
-        case SNF_OTA_STATE_APPLY:
-        case SNF_OTA_STATE_SUCCESS:
-            return 1;
-        case SNF_OTA_STATE_IDLE:
-        case SNF_OTA_STATE_VERIFY_FAILED:
-        case SNF_OTA_STATE_ABORT:
-        case SNF_OTA_STATE_FAILED:
-        default:
-            return 0;
-    }
-}
-
 static int otaMatterWaitWrite(uint32_t expected_size)
 {
     SnfMatterOtaState *ota_state = &matter_ota_state;
     TickType_t start_tick = xTaskGetTickCount();
 
-    while ((xTaskGetTickCount() - start_tick) < SNF_OTA_MATTER_WAIT_TIMEOUT_MS)
+    while ((xTaskGetTickCount() - start_tick) < pdMS_TO_TICKS(SNF_OTA_MATTER_WAIT_TIMEOUT_MS))
     {
         if (ota_state->received_size >= expected_size)
         {
             return 0;
         }
 
-        if (otaMatterStateIsFailed(ota_state->state) != 0)
+        if (snfOtaStateIsFailed(ota_state->state) != 0)
         {
             return -1;
         }
 
-        vTaskDelay(SNF_OTA_MATTER_WAIT_INTERVAL_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SNF_OTA_MATTER_WAIT_INTERVAL_MS));
     }
 
     LOG_E(tag, "Matter OTA wait timeout");
@@ -146,13 +109,14 @@ int snfOtaMatterAbort(void)
 {
     SnfMatterOtaState *ota_state = &matter_ota_state;
     TickType_t start_tick;
-    
-    if (otaMatterStateIsActive(ota_state->state) == 0)
+    int ret;
+
+    if (snfOtaStateIsActive(ota_state->state) == 0)
     {
         return 0;
     }
 
-    int ret = snfOtaAbort();
+    ret = snfOtaAbort();
     if (ret != SNF_OTA_OK)
     {
         LOG_E(tag, "abort Matter OTA failed: %d", ret);
@@ -160,13 +124,19 @@ int snfOtaMatterAbort(void)
     }
 
     start_tick = xTaskGetTickCount();
-    while ((otaMatterStateIsActive(ota_state->state) != 0)
-        && ((xTaskGetTickCount() - start_tick) < SNF_OTA_MATTER_WAIT_TIMEOUT_MS))
+    while ((snfOtaStateIsActive(ota_state->state) != 0)
+        && ((xTaskGetTickCount() - start_tick) < pdMS_TO_TICKS(SNF_OTA_MATTER_WAIT_TIMEOUT_MS)))
     {
-        vTaskDelay(SNF_OTA_MATTER_WAIT_INTERVAL_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SNF_OTA_MATTER_WAIT_INTERVAL_MS));
     }
 
-    return -1;
+    if (snfOtaStateIsActive(ota_state->state) != 0)
+    {
+        LOG_E(tag, "abort failed: timeout");
+        return -1;
+    }
+
+    return 0;
 }
 
 int snfOtaMatterWrite(uint32_t offset, const uint8_t *data, uint32_t len)
@@ -176,7 +146,7 @@ int snfOtaMatterWrite(uint32_t offset, const uint8_t *data, uint32_t len)
         return -1;
     }
 
-    if(otaMatterWaitWrite(offset + len) != 0)
+    if (otaMatterWaitWrite(offset + len) != 0)
     {
         return -1;
     }
@@ -201,9 +171,10 @@ int snfOtaMatterStart(uint32_t image_size, uint32_t version)
     ota_state->percent = 0;
 
     ota_config.image_info.size = image_size;
+    ota_config.format = SNF_OTA_FORMAT_PACKAGE;
+    memcpy(ota_config.file_name, SNF_OTA_DEFAULT_FILE_NAME, sizeof(SNF_OTA_DEFAULT_FILE_NAME));
     ota_config.image_info.version = version;
     ota_config.image_info.check_type = SNF_OTA_CHECK_NONE;
-    memset(ota_config.image_info.check, 0, sizeof(ota_config.image_info.check));
     ota_config.image_info.cipher_type = SNF_OTA_CIPHER_NONE;
     ota_config.event_callback = otaMatterEventCallback;
 

@@ -66,13 +66,13 @@ flowchart LR
 | 1 | 上电进入产测，查询 `AT+FW_VER?`，必要时发送 `AT` | 进入产测模式，固件版本符合工单 |
 | 2 | 写入并查询产品识别码 | 14 位识别码与工单一致 |
 | 3 | 写入 License，再查询 `AT+LICENSE_READ?` | 收齐写入结果和 3 行 C5 摘要，读回型号、UIID、C5 一致 |
-| 4 | 查询 `AT+MASTER_CHIP_ID?`，生成并写入授权码，再查询授权状态 | 记录芯片 OTP 原始 MAC 派生的 UID，授权状态为 `OK` |
+| 4 | 查询 `AT+MASTER_CHIP_ID?`，生成并写入授权码，再查询授权状态 | 记录芯片 PUF UID 前 16 字节，授权状态为 `OK` |
 | 5 | 写入 Matter 工厂数据并读回 | 9 个可读字段与工单一致，READ 摘要正确 |
 | 6 | 写入并读回 CD | Base64 长度、解码后内容及二进制摘要一致 |
 | 7 | 建立 ECDH 会话，写入安全证书，再查询证书状态 | 明文摘要与工单一致，返回的识别码正确 |
 | 8 | 工装复位，按产品要求进行正常功能验证 | 生产数据重启后仍有效，业务功能符合产品要求 |
 
-步骤 5～7 可按产线安排调整；证书状态查询前必须已有有效的产品识别码。License 中的 BASE MAC 仍在下次启动时应用，但芯片 ID 和授权码使用独立的 OTP 原始 MAC，无需在生成授权码前额外复位，改变 License BASE MAC 也不会改变芯片 ID。
+步骤 5～7 可按产线安排调整；证书状态查询前必须已有有效的产品识别码。License 中的 BASE MAC 仍在下次启动时应用，但芯片 ID 和授权码使用 PUF UID，无需在生成授权码前额外复位，改变 License BASE MAC 也不会改变芯片 ID。
 
 ## 2. 指令速查
 
@@ -80,7 +80,7 @@ flowchart LR
 
 | 分类 | 命令 | 功能 | 成功应答内容 |
 | --- | --- | --- | --- |
-| 身份 | `AT+MASTER_CHIP_ID?` | 查询 OTP 原始 MAC 派生的芯片标识 | `BK723x-` 加 32 位大写 HEX |
+| 身份 | `AT+MASTER_CHIP_ID?` | 查询 PUF UID 前 16 字节 | `BK723x-` 加 32 位大写 HEX |
 | 身份 | `AT+FW_VER?` | 查询固件版本 | 固件版本字符串 |
 | 身份 | `AT+MT_SERIAL_NUM?` | 查询产品识别码 | 14 位数字 |
 | 身份 | `AT+MT_SERIAL_NUM_SET` | 写入产品识别码 | `OK` |
@@ -112,13 +112,13 @@ flowchart LR
 失败：AT+MASTER_CHIP_ID=ERROR\r\n
 ```
 
-UID 共 16 字节，前 6 字节是通过 `bk_get_original_mac()` 读取的芯片 OTP 原始 MAC，后 10 字节为 `00`。前缀固定为 `BK723x`，不随项目的固件版本字符串变化。例如 OTP 原始 MAC 为 `02:00:00:00:00:01` 时：
+UID 共 16 字节，取 PUF UID 前 128 bit。前缀固定为 `BK723x`，不随项目的固件版本字符串变化。
 
 ```text
-AT+MASTER_CHIP_ID=BK723x-02000000000100000000000000000000\r\n
+AT+MASTER_CHIP_ID=BK723x-<32位大写HEX>\r\n
 ```
 
-该标识不受 License 或运行时 BASE MAC 覆盖影响。BK7239N 固定读取 OTP2 的 `OTP_MAC_ADDRESS1` 项前 6 字节，该项必须已配置有效且唯一的 MAC；读取失败、全零或组播/广播地址均返回 `ERROR`，不回退到其他 MAC 项、Flash、随机或默认 MAC。生成授权码时，应解码连字符后的 32 位 HEX 得到 16 字节 UID，不使用前缀，也不直接加密 HEX 文本。
+该标识不受 License 或运行时 BASE MAC 覆盖影响。读取失败或全零均返回 `ERROR`，不回退到 MAC、Flash、随机或默认值。生成授权码时，应解码连字符后的 32 位 HEX 得到 16 字节 UID，不使用前缀，也不直接加密 HEX 文本。
 
 ### 3.2 查询固件版本
 
@@ -161,7 +161,7 @@ SET 会写入 Flash；QUERY 在未写入、格式无效或读取失败时返回 
 当前授权码算法为：
 
 ```text
-明文 = OTP 原始 MAC 的 6 字节 || 10 字节 0x00
+明文 = PUF UID 前 16 字节
 密钥 = ASCII("soNoFF22soNoFF22")，共 16 字节
 密文 = AES-128-ECB(密钥, 明文)，单个 16 字节块，无额外填充
 授权码 = HEX(密文)，共 32 个字符
@@ -484,7 +484,7 @@ READ 从已存 DAC、私钥和 PAI 重建同样的长度头与明文，计算摘
 | 写入超时，结果未知 | 先用对应 READ / QUERY 核对，避免直接重复写入；工厂数据 READ 无法核验 passcode |
 | License 返回 `LICENSE ALREADY` | 读取并比对现有 License；工单数据一致时可按已写入处理，不自动删除 |
 | 证书重试失败 | 重新 GET 公钥、重新加密并 SET 参数，再 WRITE，不复用上一轮密文 |
-| 芯片 ID 查询失败 | 检查 OTP 原始 MAC 是否有效且可读，不使用 License BASE MAC 代替 |
+| 芯片 ID 查询失败 | 检查 PUF 是否已注册且 UID 可读，不使用 MAC 或 License BASE MAC 代替 |
 
 应答必须按命令收齐：普通命令 1 行，CD READ 3 行，安全证书 WRITE 成功 2 行，License WRITE 成功 4 行、失败 2 行。`AT` 是命令列表；`factory!` 使用进入产测提示判断结果。AT 接口未统一规定执行超时，上位机应根据实际串口速率、长报文传输、Flash 操作和密码运算耗时设置超时，并保留完整交互记录用于定位问题。
 
@@ -497,7 +497,7 @@ READ 从已存 DAC、私钥和 PAI 重建同样的长度头与明文，计算摘
 | 字段长度和配置项定义 | [sonoff_nvdm_config.h](../sonoff/nvdm/sonoff_nvdm_config.h) |
 | License、授权码、MAC、CD、安全证书实现 | [sonoff_nvdm_config.c](../sonoff/nvdm/sonoff_nvdm_config.c) |
 | 启动分支与 BASE MAC 应用 | [sonoff_entry.c](../sonoff/entry/sonoff_entry.c) |
-| OTP 原始 MAC 接口 | [mac.c](../sonoff_modify/idk_modify/components/bk_system/mac.c)、[system.h](../sonoff_modify/idk_modify/include/components/system.h) |
+| 芯片 ID | [sonoff_nvdm_config.c](../sonoff/nvdm/sonoff_nvdm_config.c) 的 `snfChipIdGet()`，依赖 `CONFIG_GET_UID_ENABLE` |
 | 当前演示项目产测入口 | [sonoff_private_factory.c](../project/onoff_plug/src/sonoff_private_factory.c) |
 | 项目型号与固件版本 | [sonoff_project_config.h](../project/onoff_plug/inc/sonoff_project_config.h) |
 | SDK CLI 参数解析 | [cli_main.c](../bk_openthread/bk_idk/components/bk_cli/cli_main.c) |

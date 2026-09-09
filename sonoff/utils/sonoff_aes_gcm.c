@@ -12,8 +12,13 @@
 #include <stdint.h>
 
 #include "mbedtls/gcm.h"
+#include "mbedtls/constant_time.h"
+#include "mbedtls/platform_util.h"
 
 #include "sonoff_aes_gcm.h"
+
+_Static_assert(sizeof(mbedtls_gcm_context) <= SNF_AES_GCM_CTX_SIZE,
+               "SnfAesGcmCtx storage is smaller than mbedtls_gcm_context");
 
 /**
  * @brief 将mbedtls返回值转换为项目错误码.
@@ -184,4 +189,97 @@ int snfAesGcmDecrypt(const uint8_t *key, const uint8_t *iv,
     *plain_len = cipher_len;
 
     return SNF_AES_GCM_OK;
+}
+
+int32_t snfAesGcmDecryptStart(SnfAesGcmCtx *ctx, const uint8_t *key, const uint8_t *iv,
+                             const uint8_t *aad, uint32_t aad_len)
+{
+    mbedtls_gcm_context *gcm;
+    int32_t ret;
+
+    if ((ctx == NULL) || (key == NULL) || (iv == NULL) || ((aad_len != 0) && (aad == NULL)))
+    {
+        return SNF_AES_GCM_ERR_INVALID_PARAM;
+    }
+
+    gcm = (mbedtls_gcm_context *)ctx->storage;
+    ret = aesGcmPrepare(gcm, key);
+    if (ret != SNF_AES_GCM_OK)
+    {
+        return ret;
+    }
+
+    ret = mbedtls_gcm_starts(gcm, MBEDTLS_GCM_DECRYPT, iv, SNF_AES_GCM_IV_SIZE);
+    if (ret == 0)
+    {
+        ret = mbedtls_gcm_update_ad(gcm, aad, aad_len);
+    }
+
+    if (ret != 0)
+    {
+        snfAesGcmFree(ctx);
+    }
+
+    return aesGcmMapError(ret);
+}
+
+int32_t snfAesGcmDecryptUpdate(SnfAesGcmCtx *ctx, const uint8_t *cipher, uint32_t size, uint8_t *plain)
+{
+    size_t output_size = 0;
+    int32_t ret;
+
+    if ((ctx == NULL) || (cipher == NULL) || (plain == NULL) || (size == 0))
+    {
+        return SNF_AES_GCM_ERR_INVALID_PARAM;
+    }
+
+    ret = mbedtls_gcm_update((mbedtls_gcm_context *)ctx->storage, cipher, size, plain, size, &output_size);
+    if (ret != 0)
+    {
+        return aesGcmMapError(ret);
+    }
+
+    if (output_size != size)
+    {
+        return SNF_AES_GCM_ERR_INTERNAL;
+    }
+
+    return SNF_AES_GCM_OK;
+}
+
+int32_t snfAesGcmDecryptFinish(SnfAesGcmCtx *ctx, const uint8_t *tag)
+{
+    uint8_t actual_tag[SNF_AES_GCM_TAG_SIZE] = {0};
+    size_t output_size = 0;
+    int32_t ret;
+
+    if ((ctx == NULL) || (tag == NULL))
+    {
+        return SNF_AES_GCM_ERR_INVALID_PARAM;
+    }
+
+    ret = mbedtls_gcm_finish((mbedtls_gcm_context *)ctx->storage, NULL, 0, &output_size,
+                             actual_tag, sizeof(actual_tag));
+    snfAesGcmFree(ctx);
+    if (ret == 0)
+    {
+        ret = (mbedtls_ct_memcmp(actual_tag, tag, sizeof(actual_tag)) == 0)
+            ? SNF_AES_GCM_OK : SNF_AES_GCM_ERR_AUTH_FAILED;
+    }
+    else
+    {
+        ret = aesGcmMapError(ret);
+    }
+
+    mbedtls_platform_zeroize(actual_tag, sizeof(actual_tag));
+
+    return ret;
+}
+
+void snfAesGcmFree(SnfAesGcmCtx *ctx)
+{
+    if (ctx != NULL)
+    {
+        mbedtls_gcm_free((mbedtls_gcm_context *)ctx->storage);
+    }
 }
