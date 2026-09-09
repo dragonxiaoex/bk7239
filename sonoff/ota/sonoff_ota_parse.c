@@ -19,8 +19,22 @@
 
 static const char *tag = "SNF-OTA-PARSE";
 
-#define OTA_HEAD_CRC_OFFSET      20
-#define OTA_FILE_CRC_OFFSET      60
+/** @brief 相对元数据头起点的字段偏移，单位为字节. */
+#define OTA_HEAD_STRUCT_VERSION_OFFSET  0  /* 结构版本 */
+#define OTA_HEAD_FILE_COUNT_OFFSET      1  /* 文件数量 */
+#define OTA_HEAD_MODEL_VERSION_OFFSET   2  /* 联合版本 */
+#define OTA_HEAD_CIPHER_TYPE_OFFSET     10 /* 加密类型 */
+#define OTA_HEAD_RESERVED_OFFSET        11 /* 预留字段 */
+#define OTA_HEAD_CRC_OFFSET             20 /* 元数据头CRC32 */
+
+/** @brief 相对单个文件属性起点的字段偏移，单位为字节. */
+#define OTA_FILE_NAME_OFFSET            0  /* 文件名 */
+#define OTA_FILE_VERSION_OFFSET         32 /* 文件版本 */
+#define OTA_FILE_DATA_OFFSET            48 /* 文件在包中的起始偏移 */
+#define OTA_FILE_SIZE_OFFSET            52 /* 文件长度 */
+#define OTA_FILE_CRC_OFFSET             56 /* 明文文件CRC32 */
+#define OTA_FILE_ATTRIBUTES_CRC_OFFSET  60 /* 文件属性CRC32 */
+#define OTA_FILE_RESERVED_OFFSET        64 /* 预留字段 */
 
 /* 读取未对齐的32位整数，data须为至少4字节且无副作用的字节指针。 */
 #define OTA_GET_BIG_ENDIAN_DATA_4B(data) \
@@ -61,7 +75,7 @@ static SnfOtaErrorCode otaParseMetadata(const uint8_t *data, uint32_t size, SnfO
         return SNF_OTA_ERROR_IMAGE_INCOMPLETE;
     }
 
-    if (data[0] != SNF_OTA_STRUCT_VERSION)
+    if (data[OTA_HEAD_STRUCT_VERSION_OFFSET] != SNF_OTA_STRUCT_VERSION)
     {
         LOG_I(tag, "unsupported version");
         return SNF_OTA_ERROR_UNSUPPORTED;
@@ -74,23 +88,24 @@ static SnfOtaErrorCode otaParseMetadata(const uint8_t *data, uint32_t size, SnfO
         return SNF_OTA_ERROR_CHECK_FAILED;
     }
 
-    if ((data[1] == 0) || (data[2] == 0))
+    if ((data[OTA_HEAD_FILE_COUNT_OFFSET] == 0) || (data[OTA_HEAD_MODEL_VERSION_OFFSET] == 0))
     {
         return SNF_OTA_ERROR_INVALID_PARAM;
     }
 
-    if ((data[10] != SNF_OTA_CIPHER_NONE) && (data[10] != SNF_OTA_CIPHER_AES_256_GCM))
+    if ((data[OTA_HEAD_CIPHER_TYPE_OFFSET] != SNF_OTA_CIPHER_NONE)
+        && (data[OTA_HEAD_CIPHER_TYPE_OFFSET] != SNF_OTA_CIPHER_AES_256_GCM))
     {
         LOG_I(tag, "unsupported cipher type");
         return SNF_OTA_ERROR_UNSUPPORTED;
     }
 
     memset(metadata, 0, sizeof(*metadata));
-    metadata->version = data[0];
-    metadata->file_count = data[1];
-    memcpy(metadata->model_version, &data[2], SNF_OTA_MODEL_VERSION_SIZE);
-    metadata->cipher_type = data[10];
-    memcpy(metadata->reserved, &data[11], sizeof(metadata->reserved));
+    metadata->version = data[OTA_HEAD_STRUCT_VERSION_OFFSET];
+    metadata->file_count = data[OTA_HEAD_FILE_COUNT_OFFSET];
+    memcpy(metadata->model_version, &data[OTA_HEAD_MODEL_VERSION_OFFSET], SNF_OTA_MODEL_VERSION_SIZE);
+    metadata->cipher_type = data[OTA_HEAD_CIPHER_TYPE_OFFSET];
+    memcpy(metadata->reserved, &data[OTA_HEAD_RESERVED_OFFSET], sizeof(metadata->reserved));
     metadata->crc = crc;
 
     return SNF_OTA_ERROR_NONE;
@@ -118,25 +133,25 @@ static SnfOtaErrorCode otaParseFile(const uint8_t *data, uint32_t size, SnfOtaFi
         return SNF_OTA_ERROR_IMAGE_INCOMPLETE;
     }
 
-    attributes_crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_CRC_OFFSET]);
-    if ((snfCrc32(UINT32_MAX, data, OTA_FILE_CRC_OFFSET) ^ UINT32_MAX) != attributes_crc)
+    attributes_crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_ATTRIBUTES_CRC_OFFSET]);
+    if ((snfCrc32(UINT32_MAX, data, OTA_FILE_ATTRIBUTES_CRC_OFFSET) ^ UINT32_MAX) != attributes_crc)
     {
         return SNF_OTA_ERROR_CHECK_FAILED;
     }
 
-    if ((data[0] == 0) || (data[32] == 0))
+    if ((data[OTA_FILE_NAME_OFFSET] == 0) || (data[OTA_FILE_VERSION_OFFSET] == 0))
     {
         return SNF_OTA_ERROR_INVALID_PARAM;
     }
 
     memset(file, 0, sizeof(*file));
-    memcpy(file->name, data, SNF_OTA_FILE_NAME_SIZE);
-    memcpy(file->version, &data[32], SNF_OTA_FILE_VERSION_SIZE);
-    file->offset = OTA_GET_BIG_ENDIAN_DATA_4B(&data[48]);
-    file->size = OTA_GET_BIG_ENDIAN_DATA_4B(&data[52]);
-    file->crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[56]);
+    memcpy(file->name, &data[OTA_FILE_NAME_OFFSET], SNF_OTA_FILE_NAME_SIZE);
+    memcpy(file->version, &data[OTA_FILE_VERSION_OFFSET], SNF_OTA_FILE_VERSION_SIZE);
+    file->offset = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_DATA_OFFSET]);
+    file->size = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_SIZE_OFFSET]);
+    file->crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_CRC_OFFSET]);
     file->attributes_crc = attributes_crc;
-    memcpy(file->reserved, &data[64], sizeof(file->reserved));
+    memcpy(file->reserved, &data[OTA_FILE_RESERVED_OFFSET], sizeof(file->reserved));
 
     return SNF_OTA_ERROR_NONE;
 }
