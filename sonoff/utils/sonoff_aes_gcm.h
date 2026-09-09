@@ -35,49 +35,49 @@ typedef struct
 /**
  * @brief 使用AES-256-GCM加密数据.
  *
- * 密文长度等于明文长度, 认证标签单独输出到tag. aad_len为0时允许aad为NULL.
- * plain_len为0时允许plain为NULL. 允许cipher与plain为同一缓冲区.
+ * 密文长度等于明文长度, 认证标签单独输出到tag. auth_data_len为0时允许auth_data为NULL.
+ * plaintext_len为0时允许plaintext为NULL. 允许cipher与plaintext为同一缓冲区.
  *
  * @param [in] key - 32字节密钥.
  * @param [in] iv - 12字节IV.
- * @param [in] aad - 附加认证数据.
- * @param [in] aad_len - 附加认证数据长度.
- * @param [in] plain - 明文.
- * @param [in] plain_len - 明文长度.
+ * @param [in] auth_data - 附加认证数据.
+ * @param [in] auth_data_len - 附加认证数据长度.
+ * @param [in] plaintext - 明文.
+ * @param [in] plaintext_len - 明文长度.
  * @param [out] cipher - 密文输出缓冲区.
- * @param [in] cipher_size - 密文缓冲区长度, 不得小于plain_len.
+ * @param [in] cipher_size - 密文缓冲区长度, 不得小于plaintext_len.
  * @param [out] cipher_len - 实际密文长度.
  * @param [out] tag - 16字节认证标签输出缓冲区.
  * @return 0表示成功, 负数表示失败.
  */
 int snfAesGcmEncrypt(const uint8_t *key, const uint8_t *iv,
-                     const uint8_t *aad, uint32_t aad_len,
-                     const uint8_t *plain, uint32_t plain_len,
+                     const uint8_t *auth_data, uint32_t auth_data_len,
+                     const uint8_t *plaintext, uint32_t plaintext_len,
                      uint8_t *cipher, uint32_t cipher_size, uint32_t *cipher_len,
                      uint8_t *tag);
 
 /**
  * @brief 使用AES-256-GCM解密并校验认证标签.
  *
- * 明文长度等于密文长度. aad_len为0时允许aad为NULL. cipher_len为0时允许cipher为NULL.
+ * 明文长度等于密文长度. auth_data_len为0时允许auth_data为NULL. cipher_len为0时允许cipher为NULL.
  * 输出缓冲区不得与输入缓冲区重叠.
  *
  * @param [in] key - 32字节密钥.
  * @param [in] iv - 12字节IV.
- * @param [in] aad - 附加认证数据.
- * @param [in] aad_len - 附加认证数据长度.
+ * @param [in] auth_data - 附加认证数据.
+ * @param [in] auth_data_len - 附加认证数据长度.
  * @param [in] cipher - 密文.
  * @param [in] cipher_len - 密文长度.
  * @param [in] tag - 16字节认证标签.
- * @param [out] plain - 明文输出缓冲区.
- * @param [in] plain_size - 明文缓冲区长度, 不得小于cipher_len.
- * @param [out] plain_len - 实际明文长度.
+ * @param [out] plaintext - 明文输出缓冲区.
+ * @param [in] plaintext_size - 明文缓冲区长度, 不得小于cipher_len.
+ * @param [out] plaintext_len - 实际明文长度.
  * @return 0表示成功, 负数表示失败.
  */
 int snfAesGcmDecrypt(const uint8_t *key, const uint8_t *iv,
-                     const uint8_t *aad, uint32_t aad_len,
+                     const uint8_t *auth_data, uint32_t auth_data_len,
                      const uint8_t *cipher, uint32_t cipher_len, const uint8_t *tag,
-                     uint8_t *plain, uint32_t plain_size, uint32_t *plain_len);
+                     uint8_t *plaintext, uint32_t plaintext_size, uint32_t *plaintext_len);
 
 /**
  * @brief 开始AES-256-GCM流式解密
@@ -87,12 +87,12 @@ int snfAesGcmDecrypt(const uint8_t *key, const uint8_t *iv,
  * @param [in,out] ctx - 零初始化或已释放的上下文.
  * @param [in] key - 32字节密钥.
  * @param [in] iv - 12字节IV.
- * @param [in] aad - 附加认证数据，aad_len为0时可为NULL.
- * @param [in] aad_len - 附加认证数据长度.
+ * @param [in] auth_data - 附加认证数据，auth_data_len为0时可为NULL.
+ * @param [in] auth_data_len - 附加认证数据长度.
  * @return 0表示成功，负数表示失败，失败时资源已释放.
  */
 int32_t snfAesGcmDecryptStart(SnfAesGcmCtx *ctx, const uint8_t *key, const uint8_t *iv,
-                             const uint8_t *aad, uint32_t aad_len);
+                             const uint8_t *auth_data, uint32_t auth_data_len);
 
 /**
  * @brief 分块解密，使用当前SDK即时输出模式
@@ -102,10 +102,10 @@ int32_t snfAesGcmDecryptStart(SnfAesGcmCtx *ctx, const uint8_t *key, const uint8
  * @param [in,out] ctx - 已开始的上下文.
  * @param [in] cipher - 密文，长度非零.
  * @param [in] size - 密文长度.
- * @param [out] plain - 至少size字节的明文缓冲区.
+ * @param [out] plaintext - 至少size字节的明文缓冲区.
  * @return 0表示成功，负数表示失败，失败后须释放上下文.
  */
-int32_t snfAesGcmDecryptUpdate(SnfAesGcmCtx *ctx, const uint8_t *cipher, uint32_t size, uint8_t *plain);
+int32_t snfAesGcmDecryptUpdate(SnfAesGcmCtx *ctx, const uint8_t *cipher, uint32_t size, uint8_t *plaintext);
 
 /**
  * @brief 完成流式解密并以恒定时间比较认证标签

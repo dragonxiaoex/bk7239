@@ -64,22 +64,22 @@ typedef struct
  */
 typedef struct
 {
-    SnfOtaMetadata metadata;                                      /**< 公司外层封装信息. */
-    SnfOtaFileInfo file;                                          /**< 选中的文件. */
-    SnfAesGcmCtx gcm;                                             /**< 流式解密上下文. */
-    uint8_t aad[SNF_OTA_META_HEAD_SIZE + SNF_OTA_META_FILE_SIZE]; /**< 元数据头与选中文件属性的原始字节. */
-    uint8_t plain[SNF_OTA_DECRYPT_BUFFER_SIZE];                   /**< 解密缓冲区. */
-    char file_name[SNF_OTA_FILE_NAME_SIZE + 1];                   /**< 目标文件名. */
-    uint8_t buffer[SNF_OTA_META_FILE_SIZE];                       /**< 外层头部、IV和认证标签的跨块缓存. */
-    uint32_t package_size;                                        /**< 输入包总长度. */
-    uint32_t offset;                                              /**< 已解析的输入长度. */
-    uint32_t previous_end;                                        /**< 前一个文件的结束位置. */
-    uint32_t file_crc;                                            /**< 封装内目标文件累计CRC. */
-    uint32_t flash_size;                                          /**< OTA分区容量. */
-    uint16_t buffered_size;                                       /**< 已缓存的头部长度. */
-    uint8_t file_index;                                           /**< 已解析的文件属性个数. */
-    uint8_t stage;                                                /**< 内部解析阶段. */
-    SnfOtaErrorCode error;                                        /**< 首次解析错误. */
+    SnfOtaMetadata metadata;                                                   /**< 公司外层封装信息. */
+    SnfOtaFileInfo file;                                                       /**< 选中的文件. */
+    SnfAesGcmCtx gcm;                                                          /**< 流式解密上下文. */
+    uint8_t auth_header_data[SNF_OTA_META_HEAD_SIZE + SNF_OTA_META_FILE_SIZE]; /**< 参与认证的元数据头与目标文件属性. */
+    uint8_t decrypt_buffer[SNF_OTA_DECRYPT_BUFFER_SIZE];                       /**< 存放解密后的文件数据. */
+    char file_name[SNF_OTA_FILE_NAME_SIZE + 1];                                /**< 目标文件名. */
+    uint8_t buffer[SNF_OTA_META_FILE_SIZE];                                    /**< 外层头部、IV和认证标签的跨块缓存. */
+    uint32_t package_size;                                                     /**< 输入包总长度. */
+    uint32_t offset;                                                           /**< 已解析的输入长度. */
+    uint32_t previous_end;                                                     /**< 前一个文件的结束位置. */
+    uint32_t file_crc;                                                         /**< 封装内目标文件累计CRC. */
+    uint32_t flash_size;                                                       /**< OTA分区容量. */
+    uint16_t buffered_size;                                                    /**< 已缓存的头部长度. */
+    uint8_t file_index;                                                        /**< 已解析的文件属性个数. */
+    uint8_t stage;                                                             /**< 内部解析阶段. */
+    SnfOtaErrorCode error;                                                     /**< 首次解析错误. */
 } SnfOtaParseContext;
 
 /**

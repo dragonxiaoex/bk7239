@@ -30,13 +30,13 @@ static const char *tag = "SNF-OTA-PARSE";
 /** @brief 顺序解析阶段. */
 typedef enum
 {
-    OTA_PARSE_METADATA = 0,
-    OTA_PARSE_FILE,
-    OTA_PARSE_FILE_GAP,
-    OTA_PARSE_GCM_IV,
-    OTA_PARSE_IMAGE,
-    OTA_PARSE_GCM_TAG,
-    OTA_PARSE_TAIL,
+    OTA_PARSE_METADATA = 0, /* 接收并校验公司包元数据头. */
+    OTA_PARSE_FILE,         /* 逐项接收文件属性，校验并选择目标文件. */
+    OTA_PARSE_FILE_GAP,     /* 跳过目标文件之前的数据，推进到文件起点. */
+    OTA_PARSE_GCM_IV,       /* 接收目标文件的IV，启动流式解密. */
+    OTA_PARSE_IMAGE,        /* 处理目标文件内容，按需解密并输出写入数据. */
+    OTA_PARSE_GCM_TAG,      /* 接收目标文件末尾的TAG，校验整体认证结果. */
+    OTA_PARSE_TAIL,         /* 跳过目标文件之后的数据，直到整个包处理完毕. */
 } OtaParseStage;
 
 /**
@@ -174,7 +174,7 @@ static SnfOtaErrorCode otaSelectFile(SnfOtaParseContext *context)
         }
 
         context->file = file;
-        memcpy(&context->aad[SNF_OTA_META_HEAD_SIZE], context->buffer, SNF_OTA_META_FILE_SIZE);
+        memcpy(&context->auth_header_data[SNF_OTA_META_HEAD_SIZE], context->buffer, SNF_OTA_META_FILE_SIZE);
     }
 
     context->previous_end = file.offset + file.size;
@@ -209,27 +209,27 @@ static SnfOtaErrorCode otaSelectFile(SnfOtaParseContext *context)
 static SnfOtaErrorCode otaParsePayload(SnfOtaParseContext *context, const uint8_t *data,
                                      uint32_t size, SnfOtaPayload *payload)
 {
-    const uint8_t *plain = data;
+    const uint8_t *image_data = data;
     uint32_t offset = context->offset - context->file.offset;
 
     if (context->metadata.cipher_type == SNF_OTA_CIPHER_AES_256_GCM)
     {
-        if (size > sizeof(context->plain))
+        if (size > sizeof(context->decrypt_buffer))
         {
-            size = sizeof(context->plain);
+            size = sizeof(context->decrypt_buffer);
         }
 
-        if (snfAesGcmDecryptUpdate(&context->gcm, data, size, context->plain) != SNF_AES_GCM_OK)
+        if (snfAesGcmDecryptUpdate(&context->gcm, data, size, context->decrypt_buffer) != SNF_AES_GCM_OK)
         {
             return SNF_OTA_ERROR_DECRYPT_FAILED;
         }
-        plain = context->plain;
+        image_data = context->decrypt_buffer;
         offset -= SNF_AES_GCM_IV_SIZE;
     }
 
     /* 外层CRC覆盖完整明文文件，文件内容原样交给平台。 */
-    context->file_crc = snfCrc32(context->file_crc, plain, size);
-    payload->data = plain;
+    context->file_crc = snfCrc32(context->file_crc, image_data, size);
+    payload->data = image_data;
     payload->offset = offset;
     payload->size = size;
 
@@ -260,7 +260,7 @@ static void otaAdvanceStage(SnfOtaParseContext *context, uint32_t header_size, u
                 return;
             }
 
-            memcpy(context->aad, context->buffer, SNF_OTA_META_HEAD_SIZE);
+            memcpy(context->auth_header_data, context->buffer, SNF_OTA_META_HEAD_SIZE);
             context->previous_end = SNF_OTA_META_HEAD_SIZE
                 + SNF_OTA_META_FILE_SIZE * (uint32_t)context->metadata.file_count;
             if (context->previous_end > context->package_size)
@@ -283,9 +283,9 @@ static void otaAdvanceStage(SnfOtaParseContext *context, uint32_t header_size, u
             }
             break;
         case OTA_PARSE_GCM_IV:
-            /* IV收齐后，以外层头部和目标文件属性作为AAD启动解密。 */
+            /* IV收齐后，以外层头部和目标文件属性作为附加认证数据启动解密。 */
             if (snfAesGcmDecryptStart(&context->gcm, ota_aes_key, context->buffer,
-                                      context->aad, sizeof(context->aad)) != SNF_AES_GCM_OK)
+                                      context->auth_header_data, sizeof(context->auth_header_data)) != SNF_AES_GCM_OK)
             {
                 context->error = SNF_OTA_ERROR_DECRYPT_FAILED;
                 return;
