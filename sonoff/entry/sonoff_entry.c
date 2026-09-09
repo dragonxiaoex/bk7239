@@ -119,7 +119,7 @@ void sonoffEntry(void)
     }
     else
     {
-        disableLocalConsoleRx();
+        //disableLocalConsoleRx();
         snfMainInit();
         snfPrivateDeviceStart();
 

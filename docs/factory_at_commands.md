@@ -6,7 +6,7 @@
 
 ## 1. 接入与产测流程
 
-### 1.1 系统边界（C4）
+### 1.1 产测工具与设备职责
 
 产测上位机是设备外部系统，通过固件控制台 UART 发送命令。设备内部由 CLI 解析命令、公共配置组件完成字段校验和密码运算，NVDM 将生产数据写入 Flash。ECDH 临时会话仅保存在 RAM。
 
@@ -14,7 +14,7 @@
 flowchart LR
     host["外部系统：产测上位机"]
     subgraph device ["系统：Sonoff 设备"]
-        subgraph firmware ["容器：应用固件，C/C++、FreeRTOS"]
+        subgraph firmware ["应用固件，C/C++、FreeRTOS"]
             cli["组件：CLI / AT 命令处理"]
             config["组件：公共配置访问与证书导入"]
             nvdm["组件：NVDM / EasyFlash"]
@@ -348,7 +348,7 @@ SHA256=<CD二进制的64位HEX摘要>\r\n
 
 ## 7. Matter 安全证书
 
-### 7.1 导入顺序（UML）
+### 7.1 导入顺序
 
 “服务端公钥”指产测上位机或其证书服务用于本次 ECDH 会话的公钥；设备通过 AT 接收这些参数，无需自行连接证书服务。
 
