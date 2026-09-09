@@ -183,6 +183,7 @@ static SnfOtaErrorCode otaSelectFile(SnfOtaParseContext *context)
 
     if (strcmp(file.name, context->file_name) == 0)
     {
+        /* size非0表示已选中同名文件，拒绝重复目标；明文长度不得超过OTA分区. */
         if ((context->file.size != 0) || ((file.size - overhead) > context->flash_size))
         {
             return SNF_OTA_ERROR_INVALID_PARAM;
