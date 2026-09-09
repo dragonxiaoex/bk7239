@@ -1,6 +1,6 @@
 /**
  * @file    sonoff_private_device.h
- * @brief   
+ * @brief   不同项目的私有化入口
  * @author  yifei wang (yifei.wang@itead.cc)
  * @date:   2026-09-08
  * 

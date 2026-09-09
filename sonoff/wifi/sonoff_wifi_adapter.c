@@ -22,25 +22,11 @@
 
 #include "sonoff_wifi_adapter.h"
 
-/**
- * @brief AP默认IPv4地址.
- */
-#define SNF_DEFAULT_AP_IP_ADDR     "192.168.100.1"
-
-/**
- * @brief AP默认子网掩码.
- */
-#define SNF_DEFAULT_AP_NETMASK     "255.255.255.0"
-
-/**
- * @brief AP默认网关地址.
- */
-#define SNF_DEFAULT_AP_GATEWAY     "192.168.100.1"
-
-/**
- * @brief AP默认DNS地址.
- */
-#define SNF_DEFAULT_AP_DNS         "192.168.100.1"
+/** @brief AP默认网络地址. */
+#define SNF_DEFAULT_AP_IP_ADDR              "192.168.100.1"     /* IPv4地址 */
+#define SNF_DEFAULT_AP_NETMASK              "255.255.255.0"     /* 子网掩码 */
+#define SNF_DEFAULT_AP_GATEWAY              "192.168.100.1"     /* 网关 */
+#define SNF_DEFAULT_AP_DNS                  "192.168.100.1"     /* DNS */
 
 /* SDK内部接口, 用于判断WIFI是否已初始化. */
 extern bool bk_get_wifi_is_inited(void);

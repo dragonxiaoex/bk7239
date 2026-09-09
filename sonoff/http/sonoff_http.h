@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_HTTP_SONOFF_HTTP_H__
-#define __SONOFF_HTTP_SONOFF_HTTP_H__
+#ifndef __SONOFF_HTTP_H__
+#define __SONOFF_HTTP_H__
 
 /**
  * @brief 启动HTTP服务.
@@ -21,4 +21,4 @@
  */
 int snfHttpServerStart(void);
 
-#endif /* __SONOFF_HTTP_SONOFF_HTTP_H__ */
+#endif /* __SONOFF_HTTP_H__ */

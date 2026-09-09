@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_HTTP_SONOFF_HTML_H__
-#define __SONOFF_HTTP_SONOFF_HTML_H__
+#ifndef __SONOFF_HTML_H__
+#define __SONOFF_HTML_H__
 
 /** @brief HTTP首页内容. */
 static const char sonoff_html_index[] =
@@ -91,4 +91,4 @@ static const char sonoff_html_index[] =
     "</body>\r\n"
     "</html>\r\n";
 
-#endif /* __SONOFF_HTTP_SONOFF_HTML_H__ */
+#endif /* __SONOFF_HTML_H__ */

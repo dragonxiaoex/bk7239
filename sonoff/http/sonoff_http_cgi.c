@@ -14,35 +14,21 @@
 #include <string.h>
 
 #include <FreeRTOS.h>
-#include <driver/gpio.h>
 #include <task.h>
 
 #include "sonoff_http_cgi.h"
 #include "sonoff_log.h"
+#include "sonoff_plug_handle.h"
 
-/** @brief HTTP CGI日志标签. */
 static const char *tag = "SNF-HTTP-CGI";
 
-/** @brief HTTP网页控制的GPIO. */
-#define SNF_HTTP_TOGGLE_GPIO GPIO_20
-
-/** @brief HTTP网页显示的默认年份. */
-#define SNF_HTTP_DEFAULT_YEAR (2026)
-
-/** @brief HTTP网页显示的默认月份. */
-#define SNF_HTTP_DEFAULT_MONTH (8)
-
-/** @brief HTTP网页显示的默认日期. */
-#define SNF_HTTP_DEFAULT_DAY (26)
-
-/** @brief HTTP网页显示的默认小时. */
-#define SNF_HTTP_DEFAULT_HOUR (9)
-
-/** @brief HTTP网页显示的默认分钟. */
-#define SNF_HTTP_DEFAULT_MINUTE (0)
-
-/** @brief HTTP网页显示的默认秒数. */
-#define SNF_HTTP_DEFAULT_SECOND (0)
+/** @brief HTTP网页默认时间. */
+#define SNF_HTTP_DEFAULT_YEAR               (2026)      /* 年 */
+#define SNF_HTTP_DEFAULT_MONTH              (8)         /* 月 */
+#define SNF_HTTP_DEFAULT_DAY                (26)        /* 日 */
+#define SNF_HTTP_DEFAULT_HOUR               (9)         /* 时 */
+#define SNF_HTTP_DEFAULT_MINUTE             (0)         /* 分 */
+#define SNF_HTTP_DEFAULT_SECOND             (0)         /* 秒 */
 
 /**
  * @brief HTTP CGI运行状态.
@@ -183,40 +169,27 @@ int snfHttpCgiToggle(const char *query,
                      char *response,
                      size_t response_size)
 {
-    int gpio_level;
-    int ret = 0;
+    uint8_t next_onoff;
+    int onoff;
+    int ret;
 
     (void)query;
     (void)query_length;
     (void)response;
     (void)response_size;
 
-    bk_gpio_disable_input(SNF_HTTP_TOGGLE_GPIO);
-    bk_gpio_enable_output(SNF_HTTP_TOGGLE_GPIO);
-
-    gpio_level = (int)bk_gpio_get_output(SNF_HTTP_TOGGLE_GPIO);
-    if (gpio_level != 0)
-    {
-        if (bk_gpio_set_output_low(SNF_HTTP_TOGGLE_GPIO) != BK_OK)
-        {
-            ret = -1;
-        }
-    }
-    else if (bk_gpio_set_output_high(SNF_HTTP_TOGGLE_GPIO) != BK_OK)
-    {
-        ret = -1;
-    }
-
+    onoff = snfPlugOnOffGet();
+    next_onoff = (onoff == 0) ? 1 : 0;
+    ret = snfPlugOnOffSet(next_onoff);
     if (ret != 0)
     {
-        LOG_E(tag, "toggle GPIO_20 failed");
-    }
-    else
-    {
-        LOG_I(tag, "toggle GPIO_20 to %d", gpio_level == 0 ? 1 : 0);
+        LOG_E(tag, "toggle onoff failed");
+        return ret;
     }
 
-    return ret;
+    LOG_I(tag, "toggle onoff to %d", next_onoff);
+
+    return 0;
 }
 
 int snfHttpCgiGetToggleStatus(const char *query,
@@ -224,7 +197,7 @@ int snfHttpCgiGetToggleStatus(const char *query,
                               char *response,
                               size_t response_size)
 {
-    int gpio_level;
+    int onoff;
     int response_length;
 
     (void)query;
@@ -235,11 +208,11 @@ int snfHttpCgiGetToggleStatus(const char *query,
         return -1;
     }
 
-    gpio_level = (int)bk_gpio_get_output(SNF_HTTP_TOGGLE_GPIO);
+    onoff = snfPlugOnOffGet();
     response_length = snprintf(response,
                                response_size,
                                "%s",
-                               gpio_level != 0 ? "HIGH" : "LOW");
+                               onoff != 0 ? "HIGH" : "LOW");
     if ((response_length < 0) || ((size_t)response_length >= response_size))
     {
         return -2;

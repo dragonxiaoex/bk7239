@@ -13,14 +13,14 @@
 
 #include "sonoff_nvdm.h"
 
-#define NVDM_TEST_ITEM                  "test.item1"
+#define NVDM_PLUG_ONOFF_ITEM                  "plug.onoff"
 
 #define SNF_PRIVATE_NVDM_USER_ITEM \
-        NVDM_USER_ITEM(NVDM_TEST_ITEM, "192.168.1.2"), 
+        NVDM_USER_ITEM(NVDM_PLUG_ONOFF_ITEM, "0"), 
 
+#define SNF_PRIVATE_NVDM_FACTORY_ITEM
 
-int snfTestItemGet(char *item, uint16_t item_size);
-int snfTestItemSet(const char *item);
-
+int snfNvdmPlugOnOffGet(void);
+int snfNvdmPlugOnOffSet(int onoff);
 
 #endif /* __SONOFF_PRIVATE_ITEM_H__ */

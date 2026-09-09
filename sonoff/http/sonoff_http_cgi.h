@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2026  深圳松诺技术有限公司
  *
  */
-#ifndef __SONOFF_HTTP_SONOFF_HTTP_CGI_H__
-#define __SONOFF_HTTP_SONOFF_HTTP_CGI_H__
+#ifndef __SONOFF_HTTP_CGI_H__
+#define __SONOFF_HTTP_CGI_H__
 
 #include <stddef.h>
 
@@ -101,4 +101,4 @@ int snfHttpCgiGetTime(const char *query,
                       char *response,
                       size_t response_size);
 
-#endif /* __SONOFF_HTTP_SONOFF_HTTP_CGI_H__ */
+#endif /* __SONOFF_HTTP_CGI_H__ */

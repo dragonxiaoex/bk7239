@@ -13,8 +13,9 @@
 
 #include <stdint.h>
 
-#define SNF_WIFI_SSID_MAX_LEN               32
-#define SNF_WIFI_PASSWORD_MAX_LEN           64
+/** @brief WIFI凭证长度. */
+#define SNF_WIFI_SSID_MAX_LEN               (32)        /* SSID最大长度 */
+#define SNF_WIFI_PASSWORD_MAX_LEN           (64)        /* 密码最大长度 */
 
 /**
  * @brief WIFI模块通用事件回调

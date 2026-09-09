@@ -13,7 +13,8 @@
 #include "sonoff_nvdm_config.h"
 #include "sonoff_nvdm.h"
 #include "sonoff_log.h"
-#include "sonoff_factory.h"
+#include "sonoff_private_factory.h"
+#include "sonoff_private_device.h"
 
 static const char *tag = "SNF-ENTRY";
 
@@ -114,12 +115,13 @@ void sonoffEntry(void)
 
     if(factory_mode_flag == 1)
     {
-        snfFactoryModeStart();
+        snfPrivateFactoryStart();
     }
     else
     {
         disableLocalConsoleRx();
         snfMainInit();
+        snfPrivateDeviceStart();
 
 #if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
         extern void ChipTest(void);

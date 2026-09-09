@@ -24,7 +24,10 @@
  **/
 
 #include "DeviceCallbacks.h"
-#include "Plug.h"
+
+/* sonoff modify start */
+#include "sonoff_plug_handle.h"
+/* sonoff modify end */
 
 #include <common/CHIPDeviceManager.h>
 
@@ -37,6 +40,9 @@
 #include <lib/support/CodeUtils.h>
 #include <lib/support/logging/CHIPLogging.h>
 #include <lib/support/logging/Constants.h>
+/* sonoff modify start */
+#include <app-common/zap-generated/attribute-type.h>
+/* sonoff modify end */
 
 static const char * TAG = "app-devicecallbacks";
 
@@ -51,17 +57,31 @@ using namespace ::chip::app;
 uint32_t identifyTimerCount;
 constexpr uint32_t kIdentifyTimerDelayMS = 250;
 
+/* sonoff modify start */
+static void onOffReportWork(intptr_t arg)
+{
+    uint8_t value = static_cast<uint8_t>(arg);
+
+    emberAfWriteAttribute(1, Clusters::OnOff::Id, Clusters::OnOff::Attributes::OnOff::Id, &value,
+                          ZCL_BOOLEAN_ATTRIBUTE_TYPE);
+}
+
+extern "C" int snfMatterOnOffReport(uint8_t onoff)
+{
+    CHIP_ERROR err = DeviceLayer::PlatformMgr().ScheduleWork(onOffReportWork, static_cast<intptr_t>(onoff != 0 ? 1 : 0));
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(DeviceLayer, "[%s] schedule onoff report failed", TAG);
+        return -1;
+    }
+
+    return 0;
+}
+/* sonoff modify end */
+
 void AppDeviceCallbacks::DeviceEventCallback(const ChipDeviceEvent * event, intptr_t arg)
 {
     CommonDeviceCallbacks::DeviceEventCallback(event, arg);
-    if (event->Type == DeviceEventType::kCHIPoBLEConnectionEstablished)
-    {
-        //PlugMgr().LedStartFlashing(true);
-    }
-    else if (event->Type == DeviceEventType::kCommissioningComplete)
-    {
-        //PlugMgr().LedStopFlashing();
-    }
 }
 
 void AppDeviceCallbacks::PostAttributeChangeCallback(EndpointId endpointId, ClusterId clusterId, AttributeId attributeId,
@@ -89,7 +109,9 @@ void AppDeviceCallbacks::OnOnOffPostAttributeChangeCallback(EndpointId endpointI
                  ChipLogError(DeviceLayer, "[%s] Unhandled Attribute ID: '0x%04lx", TAG, attributeId));
     VerifyOrExit(endpointId == 1 || endpointId == 2,
                  ChipLogError(DeviceLayer, "[%s] Unexpected EndPoint ID: `0x%02x'", TAG, endpointId));
-    PlugMgr().SetOnOff(*value);
+    /* sonoff modify start */
+    snfPlugOnOffRawSet(*value);
+    /* sonoff modify end */
 
 exit:
     return;

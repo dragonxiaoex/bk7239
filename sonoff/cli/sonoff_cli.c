@@ -28,7 +28,6 @@
 #include "sonoff_wifi.h"
 #include "sonoff_project_config.h"
 #include "sonoff_sha256.h"
-#include "xf_lcd_nv3007.h"
 
 static const char *tag = "SNF-CLI";
 
@@ -37,16 +36,9 @@ static const char *tag = "SNF-CLI";
 #define SNF_WIFI_CLI_SCAN_RESULT_MAX     10U
 #define SNF_WIFI_CLI_SCAN_ONCE_MAX       15U
 #define SNF_WIFI_CLI_SCAN_WAIT_MS        5000U
-#define SNF_LCD_CLI_COLOR_DELAY_MS       500U
 
 /** @brief vTaskList单行缓冲长度. */
 #define SNF_CLI_TASK_LIST_LINE_SIZE      (configMAX_TASK_NAME_LEN + 18)
-
-#define SNF_LCD_COLOR_BLACK              0x0000U
-#define SNF_LCD_COLOR_BLUE               0x001fU
-#define SNF_LCD_COLOR_GREEN              0x07e0U
-#define SNF_LCD_COLOR_RED                0xf800U
-#define SNF_LCD_COLOR_WHITE              0xffffU
 
 #define AT_MASTER_CHIP_NAME              "BK723x"
 #define AT_CMD_MASTER_CHIP_ID            "AT+MASTER_CHIP_ID"
@@ -287,76 +279,6 @@ static void snfNetCliCommand(int argc, char **argv)
 }
 
 /**
- * @brief 打印LCD测试命令帮助.
- */
-static void snfLcdCliPrintHelp(void)
-{
-    printf("sonoff lcd\r\n");
-    printf("sonoff lcd bl <on|off>\r\n");
-}
-
-/**
- * @brief 处理LCD测试串口命令.
- *
- * @param [in] argc - 参数数量, argv[0]为lcd.
- * @param [in] argv - 参数列表.
- */
-static void snfLcdCliCommand(int argc, char **argv)
-{
-    int ret = -1;
-
-    if (argc == 1)
-    {
-        ret = xf_lcd_init();
-        if (ret == 0)
-        {
-            xf_lcd_full_color(SNF_LCD_COLOR_BLACK);
-            xf_lcd_bl_output(1U);
-
-            xf_lcd_full_color(SNF_LCD_COLOR_RED);
-            vTaskDelay(pdMS_TO_TICKS(SNF_LCD_CLI_COLOR_DELAY_MS));
-            xf_lcd_full_color(SNF_LCD_COLOR_GREEN);
-            vTaskDelay(pdMS_TO_TICKS(SNF_LCD_CLI_COLOR_DELAY_MS));
-            xf_lcd_full_color(SNF_LCD_COLOR_BLUE);
-            vTaskDelay(pdMS_TO_TICKS(SNF_LCD_CLI_COLOR_DELAY_MS));
-            xf_lcd_full_color(SNF_LCD_COLOR_WHITE);
-        }
-
-        printf("sonoff lcd ret=%d\r\n", ret);
-    }
-    else if ((argc == 3) && (strcmp(argv[1], "bl") == 0))
-    {
-        if (strcmp(argv[2], "on") == 0)
-        {
-            xf_lcd_bl_output(1U);
-            ret = 0;
-        }
-        else if (strcmp(argv[2], "off") == 0)
-        {
-            xf_lcd_bl_output(0U);
-            ret = 0;
-        }
-        else
-        {
-            ret = -1;
-        }
-
-        if (ret == 0)
-        {
-            printf("sonoff lcd backlight %s ret=%d\r\n", argv[2], ret);
-        }
-        else
-        {
-            snfLcdCliPrintHelp();
-        }
-    }
-    else
-    {
-        snfLcdCliPrintHelp();
-    }
-}
-
-/**
  * @brief 打印堆内存查询命令帮助.
  */
 static void memCliPrintHelp(void)
@@ -497,7 +419,6 @@ static void snfNvdmCliCommand(int argc, char **argv)
 static const SnfCliEntry snf_cli_command_table[] = {
     {"wifi", "WIFI test commands", &snfWifiCliCommand, &snfWifiCliPrintHelp},
     {"net", "network test commands", &snfNetCliCommand, &snfNetCliPrintHelp},
-    {"lcd", "LCD test commands", &snfLcdCliCommand, &snfLcdCliPrintHelp},
     {"nvdm", "NVDM test commands", &snfNvdmCliCommand, &snfNvdmCliPrintHelp},
     {"mem", "show heap memory", &memCliCommand, &memCliPrintHelp},
     {"task", "show task list", &taskCliCommand, &taskCliPrintHelp},

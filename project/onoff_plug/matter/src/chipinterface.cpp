@@ -16,7 +16,6 @@
  */
 
 #include "DeviceCallbacks.h"
-#include "Plug.h"
 
 #include <common/BekenAppServer.h>
 #include <common/CHIPDeviceManager.h>
@@ -40,6 +39,10 @@
 #include <inet/BasicPacketFilters.h>
 
 #include <ota/OTAHelper.h>
+
+/* sonoff modify start */
+#include "sonoff_plug_handle.h"
+/* sonoff modify end */
 
 using chip::ByteSpan;
 using chip::EndpointId;
@@ -227,8 +230,7 @@ static void InitServer(intptr_t context)
     chip::DeviceLayer::SetDeviceInfoProvider(&gExampleDeviceInfoProvider);
 #if CHIP_DEVICE_CONFIG_ENABLE_OTA_REQUESTOR    
     OTAHelpers::Instance().InitOTARequestor();
-#endif    
-    PlugMgr().StartUpInit();
+#endif
     PrintOnboardingCodes(chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
 }
 extern "C" void matter_factory_reset(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv ){
@@ -271,7 +273,9 @@ extern "C" void ChipTest(void)
 {
     ChipLogProgress(DeviceLayer, "on-off-plug!");
     CHIP_ERROR err = CHIP_NO_ERROR;
-    PlugMgr().Init();
+    /* sonoff modify start */
+    snfPlugHandleInit();
+    /* sonoff modify end */
 
     // initPref();
     SetCommissionableDataProvider(&mFactoryDataProvider);

@@ -1,5 +1,5 @@
 /**
- * @file    sonoff_factory.c
+ * @file    sonoff_private_factory.c
  * @brief   产测模块
  * @author  yifei wang (yifei.wang@itead.cc)
  * @date:   2026-09-08
@@ -12,7 +12,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "sonoff_factory.h"
+#include "sonoff_private_factory.h"
 #include "sonoff_log.h"
 #include "sonoff_task_def.h"
 
@@ -32,7 +32,7 @@ static void snfFactoryTask(void *arg)
     }
 }
 
-void snfFactoryModeStart(void)
+void snfPrivateFactoryStart(void)
 {
     LOG_RAW("factory mode\r\n");
     vTaskDelay(20 / portTICK_PERIOD_MS);

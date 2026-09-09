@@ -23,7 +23,7 @@
 
 static const char *tag = "SNF-WIFI";
 
-#define SNF_WIFI_EVENT_QUEUE_SIZE   10U
+#define SNF_WIFI_EVENT_QUEUE_SIZE           (10)        /* 事件队列长度 */
 
 /**
  * @brief WIFI管理任务内部事件.

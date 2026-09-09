@@ -21,23 +21,14 @@
 #include "sonoff_ota_http.h"
 #include "sonoff_task_def.h"
 
-/** @brief HTTP服务日志标签. */
 static const char *tag = "SNF-HTTP";
 
-/** @brief HTTP服务监听端口. */
-#define SNF_HTTP_SERVER_PORT (80U)
-
-/** @brief HTTP服务监听队列长度. */
-#define SNF_HTTP_SERVER_BACKLOG (1U)
-
-/** @brief HTTP监听失败后的重试延时. */
-#define SNF_HTTP_ACCEPT_RETRY_DELAY_MS (100U)
-
-/** @brief HTTP请求缓冲区大小. */
-#define SNF_HTTP_REQUEST_BUFFER_SIZE (512U)
-
-/** @brief HTTP CGI响应缓冲区大小. */
-#define SNF_HTTP_CGI_RESPONSE_BUFFER_SIZE (128U)
+/** @brief HTTP服务参数. */
+#define SNF_HTTP_SERVER_PORT                (80)        /* 监听端口 */
+#define SNF_HTTP_SERVER_BACKLOG             (1)         /* 监听队列长度 */
+#define SNF_HTTP_ACCEPT_RETRY_DELAY_MS      (100)       /* 监听失败重试延时 */
+#define SNF_HTTP_REQUEST_BUFFER_SIZE        (512)       /* 请求缓冲区大小 */
+#define SNF_HTTP_CGI_RESPONSE_BUFFER_SIZE   (128)       /* CGI响应缓冲区大小 */
 
 /**
  * @brief HTTP服务运行状态.
