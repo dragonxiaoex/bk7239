@@ -21,6 +21,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [编译说明](build.md) | 环境准备、普通/安全编译、`release` 与导出文件命名 |
+| [私有项目说明](private_project.md) | 正常/产测入口、`src/inc/matter` 目录职责与编译接入 |
 | [OTA 升级](ota.md) | HTTP/Matter 打包顺序、封装与解密、接收和安装流程 |
 | [安全启动](secure_boot.md) | AWS KMS 签名、设备验签、密钥关系与验证范围 |
 | [产测 AT 手册](factory_at_commands.md) | 产测进入、生产数据写入、校验及重试规则 |
