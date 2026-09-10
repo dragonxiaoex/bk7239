@@ -74,6 +74,7 @@
 #define TCPIP_THREAD_PRIO               7
 #else
 /* sonoff modify start */
+/* 提高网络处理线程优先级，减少业务繁忙时的网络响应延迟。 */
 #define TCPIP_THREAD_PRIO               6
 /* sonoff modify end */
 #endif

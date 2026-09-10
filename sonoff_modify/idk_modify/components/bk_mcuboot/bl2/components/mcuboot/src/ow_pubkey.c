@@ -44,6 +44,7 @@
 #include "common_loader.h"
 
 /* sonoff modify start */
+/* 引入固定发布公钥，供 BL2 校验镜像中的签名公钥。 */
 #include "sonoff_trusted_pubkey.h"
 /* sonoff modify end */
 
@@ -134,6 +135,7 @@ int bk_read_pubkey_from_primary(uint8_t *pubkey, uint32_t key_size)
 #endif
 
 /* sonoff modify start */
+/* 仅接受固定发布公钥，避免信任镜像中任意携带的公钥。 */
 int bk_find_key(uint8_t image_index, uint8_t *key, uint16_t key_len, uint32_t current_slot_addr)
 {
     struct bootutil_key *selected_key = &bootutil_keys[0];

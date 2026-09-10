@@ -61,4 +61,14 @@ FWSW-01-SWITCH-BK7239N-1.1.2-20260910.164353.911-TEST.bin
 
 格式为 `FW<类别>-<编号>-<功能摘要>-<主控芯片>-<版本号>-<时间戳>-<用途>.<后缀>`。同次构建共用开始编译时的本地时间戳，精确到毫秒；原始 `package/` 产物保留。
 
+安全固件首次烧录还需配套的 `package/bootloader.bin`；`build/out/flash/` 复制的是 `all-app.bin` 应用烧录包，不包含完整启动包。部署说明见 [安全启动](secure_boot.md)。
+
+清理命令同样在 `build_tool` 目录执行：
+
+```bash
+make MODEL=onoff_plug clean           # 清理该项目的普通构建
+make MODEL=onoff_plug SECURE=1 clean  # 清理该项目的安全构建
+make all clean                       # 执行 clean 后删除根目录整个 build/，包括安全构建和 build/out/
+```
+
 更换源码目录或编译环境后重新构建，避免沿用旧构建缓存。更多说明见 [OTA](ota.md) 和 [安全启动](secure_boot.md)。

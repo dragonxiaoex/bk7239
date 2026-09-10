@@ -413,6 +413,7 @@ static void app_main_thread(void *arg)
 	bl2_ota_check();
 #endif
 /* sonoff modify start */
+/* Matter 由项目入口在模式选择后启动，避免产测模式下自动运行。 */
 #if 0
 #if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
 #ifdef CONFIG_MATTER_EXAMPLE

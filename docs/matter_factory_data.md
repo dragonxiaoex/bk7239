@@ -1,6 +1,6 @@
 # Matter 生产数据
 
-运行时不再读 `BK_PARTITION_MATTER_FACTORY`。证书、配对参数和设备信息都从 NVDM（EasyFlash）或工程宏取。接入点仍是 overlay 里的 `FactoryDataProvider`。
+证书、配对参数和设备信息通过项目覆盖的 [FactoryDataProvider](../sonoff_modify/matter_modify/connectedhomeip/src/platform/Beken/FactoryDataProvider.cpp) 从 NVDM（EasyFlash）或项目宏获取。当前运行路径不读取 `BK_PARTITION_MATTER_FACTORY`。
 
 NVDM 组名为 `matter`。CD / DAC / PAI / DAC 密钥以 Base64 字符串存储，读取时解码为二进制。
 
@@ -35,4 +35,6 @@ NVDM 组名为 `matter`。CD / DAC / PAI / DAC 密钥以 Base64 字符串存储�
 - CD：`AT+MT_CD_WRITE` / `READ` / `DELETE`
 - DAC / DAC 密钥 / PAI：先 `AT+MT_PUB_KEY_GET` + `AT+MT_PUB_KEY_SET`，再 `AT+MT_SECURE_CERT_WRITE`；查询 `AT+MT_SECURE_CERT_READ`，删除 `AT+MT_SECURE_CERT_DELETE`
 
-overlay 里对 `BK_PARTITION_MATTER_FACTORY` 的旧读路径保留在 `#if 0` 中，不参与编译。
+设备运行时的 VID/PID 来自 NVDM；[OTA 打包](ota.md) 使用项目宏 `SONOFF_MATTER_VENDOR_ID`、`SONOFF_MATTER_PRODUCT_ID`，两者必须一致。修改打包宏不会改写设备已经存储的生产数据。
+
+覆盖文件中的旧分区读取代码保留在 `#if 0` 中，不参与编译。

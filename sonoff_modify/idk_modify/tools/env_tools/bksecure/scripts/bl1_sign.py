@@ -68,6 +68,7 @@ def gen_manifest_bin(action_type, manifest_json_file, outfile):
 
 def bl1_sign(action_type, key_type, privkey_pem_file, pubkey_pem_file, signature, bin_file, static_addr, load_addr, outfile):
     # sonoff modify start
+    # 支持由 AWS KMS 签署 BL1 manifest 摘要，避免在本地保存签名私钥。
     if action_type == 'sign' and str(privkey_pem_file).endswith('.json'):
         import sys
         from pathlib import Path

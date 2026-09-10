@@ -176,6 +176,9 @@ BL1 需要的平台 manifest 格式由 `secure_boot_tool` 负责生成，KMS 适
 | `app_signed.bin` | `overwrite.bin` 对应的签名应用镜像及工具打包描述 | BL2 |
 | `all-app.bin` | `partition.bin` 与 `app_signed.bin` 的应用烧录封装 | 应用镜像由 BL2 验证 |
 | `ota.bin` | BK OTA 包头、镜像描述及签名后的压缩载荷 | BL2 验证外层和解压后的内层 |
+| `ota_raw.bin` | SDK 输出的可直接写入 OTA 分区的签名压缩镜像，作为外层打包输入 | BL2 |
+| `ota_encrypted.bin` | 在 `ota_raw.bin` 外添加 OTA 封装并用 AES-256-GCM 加密，供 HTTP 等通道使用 | OTA 核心解析、解密及校验后写入 |
+| `ota_matter.ota` | 在完整 `ota_encrypted.bin` 外添加 Matter 头 | Matter SDK 处理头部，载荷交给 OTA 核心 |
 | `otp_efuse_config.json` | 硬件安全配置及根公钥摘要的工具输出 | 由部署流程核对并使用 |
 
 `bootloader.bin` 与 `all-app.bin` 是配套的启动、应用烧录包；当前 `all-app.bin` 不包含完整启动包。`cpu0_app.bin` 和 `overwrite.bin` 属于构建中间产物。
@@ -198,7 +201,7 @@ ota.bin
 
 内层签名保护最终安装和执行的应用，外层签名保护升级时处理的压缩镜像。BK 包头的 CRC、传输校验与镜像数字签名承担不同职责。
 
-Matter 升级档在这个 `ota.bin` 外再封装 Matter 头；移除 Matter 头后，与 HTTP 等渠道使用的基础包相同。多渠道一键打包脚本尚待整理；HTTP/Matter 对新安全包的完整接收适配及板端升级验证见 [OTA 文档](ota.md)，不能仅凭签名包生成成功判断渠道已可用。
+构建自动以 `ota_raw.bin` 为输入，先调用 `pack_ota.py` 生成 `ota_encrypted.bin`，再调用 `pack_matter_ota.py` 生成 `ota_matter.ota`。移除 Matter 头后得到完整 HTTP 升级包；设备再解开 OTA 封装，将原始 `ota_raw.bin` 内容写入分区。原始 `ota.bin` 保留为 SDK 产物，不作为这两条通道的外层打包输入。接收适配和主机回归已实现，板端升级验证范围见 [OTA 文档](ota.md)。
 
 ## 6. 设备端怎样验签
 
@@ -252,7 +255,7 @@ sequenceDiagram
 
 ### 7.1 固件与打包配置
 
-当前 [产品 config](../build_tool/config/bk7239n/config) 的关键项如下：
+当前安全构建由 [公共配置](../build_tool/config/bk7239n/config) 与 [安全配置](../build_tool/config/bk7239n/secure/config) 组合生成，关键项如下：
 
 ```ini
 CONFIG_SECURITY_FIRMWARE=y
@@ -281,16 +284,7 @@ CONFIG_ANTI_ROLLBACK=n
 
 ### 7.2 环境、身份与公钥准备
 
-构建使用 Python 3.10 或兼容版本，并安装 [bksecure 依赖](../bk_openthread/bk_idk/tools/env_tools/bksecure/requirements.txt) 和 [Matter 构建依赖](../bk_openthread/components/matter/connectedhomeip/scripts/setup/requirements.build.txt)。已有满足依赖的环境可直接使用；需要新环境时，在项目根目录执行：
-
-```bash
-python3.10 -m venv build_tool/python-env
-source build_tool/python-env/bin/activate
-python -m pip install \
-    -r bk_openthread/bk_idk/tools/env_tools/bksecure/requirements.txt \
-    -r bk_openthread/components/matter/connectedhomeip/scripts/setup/requirements.build.txt
-python -m pip check
-```
+Python、工具链与依赖准备见 [编译说明](build.md)。以下命令均在 `build_tool` 目录执行，并已激活 Python 环境。
 
 签名使用可访问配置密钥的 `firmware` profile，调用方需具有该密钥的 `kms:Sign` 权限；导出公钥需要 `kms:GetPublicKey` 权限。KMS 密钥应为 `ECC_NIST_P256`、`SIGN_VERIFY` 且可用于签名。[AWS KMS Sign](https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html)、[GetPublicKey](https://docs.aws.amazon.com/kms/latest/APIReference/API_GetPublicKey.html)
 
@@ -301,24 +295,26 @@ aws login --profile firmware --region ap-southeast-2 --remote
 aws sts get-caller-identity --profile firmware --region ap-southeast-2 --no-cli-pager
 ```
 
-BL2 公钥头文件已经存在，正常构建无需重新生成。初次生成的入口是 `python build_tool/ota/convert_sign.py`；确需按当前公钥重新生成时使用 `--replace`。该脚本只更新构建侧头文件，不写入设备 OTP/eFuse。
+BL2 公钥头文件已经存在，正常构建无需重新生成。初次生成的入口是 `python3 ota/convert_sign.py`；确需按当前公钥重新生成时使用 `--replace`。该脚本只更新构建侧头文件，不写入设备 OTP/eFuse。
 
 ### 7.3 构建与离线检查
 
-在已准备好 Python 环境和 AWS profile 的终端，从项目根目录执行：
+在已准备好 Python 环境和 AWS profile 的终端，进入 `build_tool` 后执行：
 
 ```bash
-make -C build_tool MODEL=onoff_plug SECURE=1 SOC=bk7239n
+make MODEL=onoff_plug SECURE=1
 ```
 
 安全构建产物目录是 `build/secure/bk7239n/onoff_plug/package/`。Makefile 自动设置签名脚本的 `PYTHONPATH`，打包时执行 KMS 签名，不需要手工向镜像末尾追加签名，也不需要单独运行分步摘要回填命令。
+
+命令追加 `release` 仅将 `build/out/flash/`、`build/out/http/`、`build/out/matter/` 导出文件名中的用途改为 `FACTORY`，默认是 `TEST`；不改变签名、加密和 SDK 编译配置。上述产物路径均相对项目根目录。
 
 Makefile 和脚本根据自身位置定位项目目录；更换源码目录后应重新构建，生成新的配置和路径。新编译环境仍需安装工具链、Python 依赖和 AWS CLI，并配置签名所用的 AWS profile。原厂 SDK 默认工具链目录为 `/opt/gcc-arm-none-eabi-10.3-2021.10/bin`，安装位置不同时需要配置工具链路径。
 
 签名适配器的离线测试入口如下，测试用桩替换 AWS CLI 调用：
 
 ```bash
-python build_tool/ota/test_aws_kms_sign.py
+python3 ota/test_aws_kms_sign.py
 ```
 
 该测试覆盖摘要只计算一次、AWS 调用失败、错误密钥签名、应答 Key ARN/算法不符、摘要长度错误和公钥曲线错误，并验证普通/安全构建的脚本导入路径、PEM 密钥加载、应用镜像签名验签和 BL1 主备 manifest 签名。迁移测试将项目复制到新目录，从其他工作目录验证配置准备、公钥转换、OTA 加密封装及 Matter 打包与提取。SDK 工具复制到临时目录执行，AWS CLI 调用由离线签名桩替代。
@@ -336,6 +332,6 @@ python build_tool/ota/test_aws_kms_sign.py
 | 构建、打包和 BL2 验签路径 | 已按当前源码与配置核对 |
 | 真实 KMS 调用及完整固件重建 | 本次整理文档未重新执行 |
 | OTP/eFuse 实际烧录及板端启动 | 待板端验证 |
-| HTTP / Matter 安全 OTA 全流程 | 接收适配及板端验证仍需完成，详见 [ota.md](ota.md) |
+| HTTP / Matter 安全 OTA 全流程 | 接收适配、两层打包与主机回归已完成；实际传输、重启安装仍待板端验证，详见 [ota.md](ota.md) |
 
 板端验证应覆盖：正确镜像启动、错误发布公钥签名被拒绝、签名缺失或损坏被拒绝、BL2 或应用内容被篡改后被拒绝，以及正常升级与写入中断后的启动行为。构造签名负例时应保持包格式和非密码学 CRC 正确，以区分格式错误、CRC 错误和实际验签拒绝。

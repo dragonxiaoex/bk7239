@@ -1,4 +1,5 @@
 /* sonoff modify start */
+/* 固化发布公钥，作为 BL2 判断镜像签名公钥是否可信的依据。 */
 /**
  * @file    sonoff_trusted_pubkey.h
  * @brief   BL2 固定发布公钥

@@ -119,7 +119,9 @@ void sonoffEntry(void)
     }
     else
     {
-        //disableLocalConsoleRx();
+#if SONOFF_DISABLE_LOG_RX
+        disableLocalConsoleRx();
+#endif
         snfMainInit();
         snfPrivateDeviceStart();
 

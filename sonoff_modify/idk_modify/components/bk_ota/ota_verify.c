@@ -90,7 +90,7 @@ static void set_bit_one_in_buffer(uint8_t* buffer, size_t value)
 #if CONFIG_PSA_MBEDTLS
 
 /* sonoff modify start */
-/* SDK ASN.1 fields are public when OpenThread is enabled. */
+/* 兼容启用 OpenThread 前后 mbedTLS ASN.1 成员的不同命名。 */
 #if CONFIG_OPENTHREAD
 #define OTA_ASN1_MEMBER(member) member
 #else
@@ -120,6 +120,7 @@ static int ota_import_key(uint8_t **cp, uint8_t *end)
 	}
 	/* id-ecPublicKey (RFC5480) */
 	/* sonoff modify start */
+	/* 使用兼容宏读取算法标识，避免 ASN.1 成员名不匹配导致编译失败。 */
 	if (alg.OTA_ASN1_MEMBER(len) != sizeof(ec_pubkey_oid) - 1 ||
 		memcmp(alg.OTA_ASN1_MEMBER(p), ec_pubkey_oid, sizeof(ec_pubkey_oid) - 1)) {
 	/* sonoff modify end */
@@ -127,6 +128,7 @@ static int ota_import_key(uint8_t **cp, uint8_t *end)
 	}
 	/* namedCurve (RFC5480) */
 	/* sonoff modify start */
+	/* 使用兼容宏读取曲线参数，避免 ASN.1 成员名不匹配导致编译失败。 */
 	if (param.OTA_ASN1_MEMBER(len) != sizeof(ec_secp256r1_oid) - 1 ||
 		memcmp(param.OTA_ASN1_MEMBER(p), ec_secp256r1_oid, sizeof(ec_secp256r1_oid) - 1)) {
 	/* sonoff modify end */

@@ -119,6 +119,7 @@ int __wrap_printf(const char *fmt, ...)
     shell_log_out_port(LOG_COMMON_MODE, BK_LOG_NONE, NULL, fmt, args);
 #else
     /* sonoff modify start */
+    /* 扩大格式化缓冲区，减少产测长应答和日志被截断的情况。 */
     char string[768];
     /* sonoff modify end */
     vsnprintf(string, sizeof(string)-1, fmt, args);
@@ -143,6 +144,7 @@ int __wrap_iprintf(const char *fmt, ...)
     shell_log_out_port(LOG_COMMON_MODE, BK_LOG_NONE, NULL, fmt, args);
 #else
     /* sonoff modify start */
+    /* 扩大格式化缓冲区，减少产测长应答和日志被截断的情况。 */
     char string[768];
     /* sonoff modify end */
     vsnprintf(string, sizeof(string)-1, fmt, args);
@@ -158,6 +160,7 @@ int __wrap_iprintf(const char *fmt, ...)
 int __wrap_vprintf(const char *format,va_list args)
 {
     /* sonoff modify start */
+    /* 扩大格式化缓冲区，减少产测长应答和日志被截断的情况。 */
     char string[768];
     /* sonoff modify end */
     int len;
@@ -174,6 +177,7 @@ int __wrap_vprintf(const char *format,va_list args)
 int __wrap_viprintf(const char *format,va_list args)
 {
     /* sonoff modify start */
+    /* 扩大格式化缓冲区，减少产测长应答和日志被截断的情况。 */
     char string[768];
     /* sonoff modify end */
     int len;

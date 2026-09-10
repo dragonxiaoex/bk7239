@@ -1300,6 +1300,7 @@ uint32_t bk_erase_ota_data_in_flash_per_sector( uint32_t dw_offaddr)
 bk_err_t bk_flash_read_matter_factory(uint32_t offset, uint8_t *value, uint32_t length)
 {
     /* sonoff modify start */
+    /* 生产数据改由 NVDM 提供，禁用原厂 Matter 工厂分区读取。 */
     return kGeneralErr;
 #if 0
     bk_logic_partition_t * pt = NULL;

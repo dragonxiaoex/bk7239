@@ -2,3 +2,5 @@
 *.o
 *.pyc
 __pycache__/
+/.vscode/
+/thirty_part/

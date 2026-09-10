@@ -345,7 +345,7 @@ class Image():
             pub = bytes()
 
         # sonoff modify start
-        # The key used to sign must match the public key consumed by BK BL2.
+        # 确保镜像内提供给 BL2 的公钥与实际签名密钥一致，避免生成无法验签的镜像。
         if key is not None and custom_tlvs is not None and 0xa0 in custom_tlvs:
             if custom_tlvs[0xa0] != pub:
                 raise ValueError('Image public key does not match the signing key')

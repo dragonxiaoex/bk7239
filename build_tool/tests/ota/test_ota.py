@@ -1,16 +1,19 @@
-"""OTA流解析和核心写入回归：python3 tests/ota/test_ota.py。"""
+"""OTA流解析和核心写入回归：在build_tool目录运行python3 tests/ota/test_ota.py。"""
 import os
+import hashlib
 import importlib.util
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-ROOT = Path(__file__).resolve().parents[2]
+TEST_DIR = Path(__file__).resolve().parent
+ROOT = TEST_DIR.parents[2]
 FLASH_OFFSET = 0x264000
 FLASH_SIZE = 1492 * 1024
 TEST_KEY = bytes(range(32))
@@ -71,7 +74,7 @@ class OtaTests(unittest.TestCase):
                                   + ", ".join(f"0x{byte:02x}" for byte in TEST_KEY) + ",\n};\n")
         flags = ["gcc", "-std=c99", "-Wall", "-Werror", "-g", "-fsanitize=undefined",
                  "-fno-sanitize-recover=all", "-I" + str(cls.work),
-                 "-I" + str(ROOT / "tests/ota/stubs"),
+                 "-I" + str(TEST_DIR / "stubs"),
                  "-I" + str(ROOT / "sonoff/utils"), "-I" + str(crypto / "include"),
                  '-DMBEDTLS_CONFIG_FILE="ota_mbedtls_config.h"',
                  "-I" + str(ROOT / "sonoff/ota"), "-I" + str(sdk / "include")]
@@ -88,7 +91,7 @@ class OtaTests(unittest.TestCase):
             obj = cls.work / (source.stem + ".o")
             subprocess.run(flags + ["-c", str(source), "-o", str(obj)], check=True)
             objects.append(str(obj))
-        subprocess.run(flags + [str(ROOT / "tests/ota/ota_core_test.c")] + objects + [
+        subprocess.run(flags + [str(TEST_DIR / "ota_core_test.c")] + objects + [
                                "-o", str(cls.exe)], check=True)
         cls.payload = bytes(range(256)) * 33 + b"tail"
 
@@ -397,16 +400,22 @@ class OtaTests(unittest.TestCase):
             bk = package_dir / "ota.bin"
             raw = package_dir / "ota_raw.bin"
             rbl = package_dir / "app_pack.rbl"
+            factory = package_dir / "all-app.bin"
+            factory_image = b"SDK factory image\x00\xff" + self.payload
             bk_image = bk_package(self.payload)
             rbl_image = rbl_package(self.payload)
             bk.write_bytes(bk_image)
             raw.write_bytes(self.payload)
             rbl.write_bytes(rbl_image)
+            factory.write_bytes(factory_image)
+            out_dir = build_dir / "out"
+            timestamp = "20260910.164353.911"
             command = ["make", "--no-print-directory", "-C", str(ROOT / "build_tool"),
                        "MODEL=onoff_plug", "BUILD_DIR=" + str(build_dir),
+                       "OUT_DIR=" + str(out_dir), "BUILD_TIMESTAMP=" + timestamp,
                        "OTA_KEY_HEADER=" + str(self.key_header)]
             if secure:
-                command.append("SE=1")
+                command.append("SECURE=1")
             result = subprocess.run(command + ["prepare_project", "ota_package"],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -415,16 +424,118 @@ class OtaTests(unittest.TestCase):
             self.assertIn("CONFIG_SECURITY_FIRMWARE=" + ("y" if secure else "n"), config)
             self.assertEqual((config_dir / "security.csv").exists(), secure)
             self.assertEqual((config_dir / "auto_partitions.csv").exists(), not secure)
+            for name in ["aws_kms_public.pem", "aws_kms_signer.json"]:
+                self.assertEqual((config_dir / name).exists(), secure)
+                if secure:
+                    self.assertEqual((config_dir / name).read_bytes(),
+                                     (ROOT / "build_tool/sign" / name).read_bytes())
             output = package_dir / "ota_encrypted.bin"
             self.run_package(output.read_bytes(), self.payload if secure else rbl_image)
+            matter = package_dir / "ota_matter.ota"
+            magic, size, header_size = struct.unpack_from("<IQI", matter.read_bytes())
+            self.assertEqual(magic, 0x1BEEF11E)
+            self.assertEqual(size, matter.stat().st_size)
+            self.assertEqual(matter.read_bytes()[16 + header_size:], output.read_bytes())
+            basename = "FWSW-01-SWITCH-BK7239N-1.1.2-" + timestamp + "-TEST"
+            for kind, source in [("flash", factory), ("http", output), ("matter", matter)]:
+                exported = out_dir / kind / (basename + source.suffix)
+                self.assertEqual(exported.read_bytes(), source.read_bytes())
             self.assertEqual(bk.read_bytes(), bk_image)
             self.assertEqual(raw.read_bytes(), self.payload)
             self.assertEqual(rbl.read_bytes(), rbl_image)
+            self.assertEqual(factory.read_bytes(), factory_image)
             output.unlink()
+            matter.unlink()
             (raw if secure else rbl).unlink()
             result = subprocess.run(command + ["ota_package"], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(output.exists())
+            self.assertFalse(matter.exists())
+
+    def test_release_build_exports_both_ota_formats(self):
+        sdk = self.work / "fake_sdk"
+        sdk.mkdir()
+        factory_image = b"SDK factory firmware\x00\xff"
+        (sdk / "all-app.bin").write_bytes(factory_image)
+        (sdk / "app_pack.rbl").write_bytes(rbl_package(self.payload))
+        (sdk / "ota_raw.bin").write_bytes(self.payload)
+        (sdk / "Makefile").write_text(
+            "bk7239n:\n"
+            '\t@mkdir -p "$(BUILD_DIR)/bk7239n/$(PROJECT)/package"\n'
+            '\t@cp all-app.bin app_pack.rbl ota_raw.bin "$(BUILD_DIR)/bk7239n/$(PROJECT)/package/"\n'
+            '\t@echo build >> "$(BUILD_DIR)/sdk_calls"\n')
+        out_dir = self.work / "release_out"
+        timestamp = "20260910.164353.912"
+        header = ROOT / "project/onoff_plug/inc/sonoff_project_config.h"
+        sys.path.insert(0, str(ROOT / "build_tool/ota"))
+        import pack_matter_ota
+
+        for secure in [False, True]:
+            for release in [False, True]:
+                with self.subTest(secure=secure, release=release):
+                    build_dir = self.work / f"build_{secure}_{release}"
+                    command = ["make", "--no-print-directory", "-C", str(ROOT / "build_tool"),
+                               "-j2", "MODEL=onoff_plug", f"SECURE={int(secure)}",
+                               "SDK_DIR=" + str(sdk), "BUILD_DIR=" + str(build_dir),
+                               "OUT_DIR=" + str(out_dir), "BUILD_TIMESTAMP=" + timestamp,
+                               "OTA_KEY_HEADER=" + str(self.key_header),
+                               "overlay_copy=:", "restore_sdk=:"]
+                    if release:
+                        command += ["build", "release"]
+                    result = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual((build_dir / "sdk_calls").read_text(), "build\n")
+                    purpose = "FACTORY" if release else "TEST"
+                    basename = "FWSW-01-SWITCH-BK7239N-1.1.2-" + timestamp + "-" + purpose
+                    self.assertEqual((out_dir / "flash" / (basename + ".bin")).read_bytes(), factory_image)
+                    http = (out_dir / "http" / (basename + ".bin")).read_bytes()
+                    matter_path = out_dir / "matter" / (basename + ".ota")
+                    matter = matter_path.read_bytes()
+                    magic, size, header_size = struct.unpack_from("<IQI", matter)
+                    self.assertEqual(magic, 0x1BEEF11E)
+                    self.assertEqual(size, len(matter))
+                    self.assertEqual(matter[16 + header_size:], http)
+                    metadata = pack_matter_ota.TLVReader(matter[16:16 + header_size]).get()['Any']
+                    self.assertEqual(metadata[0], int(ota_pack.read_define(header, "SONOFF_MATTER_VENDOR_ID"), 0))
+                    self.assertEqual(metadata[1], int(ota_pack.read_define(header, "SONOFF_MATTER_PRODUCT_ID"), 0))
+                    self.assertEqual(metadata[2], 2)
+                    self.assertEqual(metadata[3], "1.1.2")
+                    self.assertEqual(metadata[4], len(http))
+                    self.assertEqual(metadata[9], hashlib.sha256(http).digest())
+                    self.run_package(http, self.payload if secure else rbl_package(self.payload))
+
+    def test_matter_packaging_failure_keeps_previous_outputs(self):
+        directory = self.work / "failed_matter"
+        directory.mkdir()
+        source = directory / "app_pack.rbl"
+        source.write_bytes(rbl_package(self.payload))
+        factory = directory / "all-app.bin"
+        factory.write_bytes(b"factory image")
+        http = directory / "ota_encrypted.bin"
+        matter = directory / "ota_matter.ota"
+        http.write_bytes(b"previous HTTP package")
+        matter.write_bytes(b"previous Matter package")
+        config = directory / "project_config.h"
+        header = (ROOT / "project/onoff_plug/inc/sonoff_project_config.h").read_text()
+        config.write_text(header.replace(
+            '#define SONOFF_MATTER_SOFTWARE_VERSION_STRING   "1.1.2"',
+            '#define SONOFF_MATTER_SOFTWARE_VERSION_STRING   "' + "x" * 65 + '"'))
+        output = directory / "out"
+        result = subprocess.run([
+            sys.executable, str(ROOT / "build_tool/ota/package_firmware.py"),
+            "--input", str(source), "--factory", str(factory),
+            "--project-header", str(config), "--key-header", str(self.key_header),
+            "--out-dir", str(output), "--timestamp", "20260910.164353.913",
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OTA package created:", result.stdout)
+        self.assertIn("Software version string", result.stderr)
+        self.assertEqual(http.read_bytes(), b"previous HTTP package")
+        self.assertEqual(matter.read_bytes(), b"previous Matter package")
+        self.assertEqual(source.read_bytes(), rbl_package(self.payload))
+        self.assertEqual(factory.read_bytes(), b"factory image")
+        self.assertFalse(output.exists())
+        self.assertFalse(list(directory.glob(".ota-*")))
 
 
 if __name__ == "__main__":

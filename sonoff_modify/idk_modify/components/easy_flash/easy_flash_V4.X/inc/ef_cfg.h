@@ -87,6 +87,7 @@ extern uint32_t g_ef_start_addr;
 
 /* ENV area size. It's at least one empty sector for GC. So it's definition must more then or equal 2 flash sector size. */
 /* sonoff modify start */
+/* 扩大配置存储区域，为生产数据和运行配置预留空间。 */
 #define ENV_AREA_SIZE     (4 * EF_ERASE_MIN_SIZE)      /* 16K */
 /* sonoff modify end */
 

@@ -117,7 +117,7 @@
 #define SHELL_CMD_BUF_LEN		4096
 #else
 /* sonoff modify start */
-/* Keep the existing CLI capacity for factory commands. */
+/* 与 CLI 接收容量保持一致，避免产测长指令在 Shell 层被截断。 */
 #define SHELL_CMD_BUF_LEN        INBUF_SIZE
 /* sonoff modify end */
 #endif

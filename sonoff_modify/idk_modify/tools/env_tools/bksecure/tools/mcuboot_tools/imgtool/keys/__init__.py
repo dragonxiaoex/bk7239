@@ -44,6 +44,7 @@ class PasswordRequired(Exception):
 def load(path, passwd=None):
     """Try loading a key from the given path.  Returns None if the password wasn't specified."""
     # sonoff modify start
+    # 将 JSON 签名配置交给 AWS KMS 适配器，支持远程签名密钥。
     if str(path).endswith('.json'):
         from aws_kms import AwsKmsKey
         return AwsKmsKey(path)

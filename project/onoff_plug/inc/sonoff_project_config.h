@@ -9,7 +9,6 @@
 #define SONOFF_DEVICE_FUNCTION                  "SWITCH"
 #define SONOFF_DEVICE_CHIP                      "BK7239N"
 
-
 #define SONOFF_SOFTWARE_VERSION_STRING          "1.1.2"
 
 /** @brief Matter OTA 包标识，需与目标设备的产测配置一致. */
@@ -20,5 +19,8 @@
 #define SONOFF_MATTER_SOFTWARE_VERSION_STRING   "1.1.2"
 #define SONOFF_MATTER_HARDWARE_VERSION          1
 #define SONOFF_MATTER_HARDWARE_VERSION_STRING   "1.1.1"
+
+/* 项目配置宏 */
+#define SONOFF_DISABLE_LOG_RX                    1  /* 禁用调试串口接收 */
 
 #endif /* __SONOFF_PROJECT_CONFIG_H__ */

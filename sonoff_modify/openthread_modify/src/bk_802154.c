@@ -573,8 +573,8 @@ bk_err_t bk_ieee802154_enable(void)
 
     s_802154_state = BK_802154_STATE_IDLE;
     /* sonoff modify start */
-#if CONFIG_WIFI_THREAD_COEX_EN
     /* 通知共存逻辑 Thread 射频已就绪，允许 Wi-Fi 使用射频时退出 Thread 模式。 */
+#if CONFIG_WIFI_THREAD_COEX_EN
     vOpenthreadSetStartStatus(true);
 #endif
     /* sonoff modify end */
@@ -586,8 +586,8 @@ bk_err_t bk_ieee802154_disable(void)
     mac802154_mac_deinit();
     s_802154_state = BK_802154_STATE_DISABLE;
     /* sonoff modify start */
-#if CONFIG_WIFI_THREAD_COEX_EN
     /* Thread 停止后，Wi-Fi 释放射频时不再切回 Thread 模式。 */
+#if CONFIG_WIFI_THREAD_COEX_EN
     vOpenthreadSetStartStatus(false);
 #endif
     /* sonoff modify end */
@@ -894,6 +894,7 @@ bk_802154_rx_err_t bk_ieee802154_get_tx_err()
 }
 
 /* sonoff modify start */
+/* 将 CLI 占位实现设为弱符号，允许 SDK 的 CLI 初始化实现生效。 */
 __attribute__((weak)) int bk_cli_init(void)
 {
     os_printf("openthread not use default cli\n");

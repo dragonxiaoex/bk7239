@@ -5,6 +5,7 @@
 #   make MODEL=onoff_plug SOC=bk7239n
 #   make MODEL=onoff_plug SOC=bk7239n menuconfig
 #   make MODEL=onoff_plug clean
+#   make all clean
 #   make restore
 
 SHELL := /bin/bash
@@ -62,7 +63,11 @@ PROJECT_CONFIG_DIR := $(PROJECT_DIR)/config/$(SOC)
 
 .PHONY: all build release menuconfig clean restore help apply_overlay prepare_project ota_package
 
+ifneq ($(filter clean,$(MAKECMDGOALS)),)
+all: clean
+else
 all: build
+endif
 
 release: build
 
@@ -76,6 +81,7 @@ help:
 	@echo "  make MODEL=<name> [SECURE=1] ota_package package and export existing SDK outputs"
 	@echo "  make MODEL=<name> menuconfig   configure project (default SOC=$(SOC))"
 	@echo "  make MODEL=<name> clean        remove that project's build output"
+	@echo "  make all clean                 run clean, then remove the entire root build directory"
 	@echo "  make restore                   restore bk_openthread / bk_idk via git"
 	@echo ""
 	@echo "  overlay: sonoff_modify/idk_modify       -> bk_openthread/bk_idk"
@@ -232,4 +238,8 @@ ifeq ($(MODEL),)
 else
 	@echo "rm -rf $(BUILD_DIR)/$(SOC)/$(MODEL) $(BUILD_DIR)/project_tree/$(MODEL)"
 	@rm -rf "$(BUILD_DIR)/$(SOC)/$(MODEL)" "$(BUILD_DIR)/project_tree/$(MODEL)"
+endif
+ifneq ($(filter all,$(MAKECMDGOALS)),)
+	@echo "rm -rf $(ROOT)/build"
+	@rm -rf "$(ROOT)/build"
 endif

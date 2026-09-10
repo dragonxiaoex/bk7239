@@ -41,12 +41,14 @@ extern "C" {
 
 #ifdef CONFIG_KEYVALUE
 /* sonoff modify start */
+/* 扩大命令接收缓冲区，容纳产测证书和 License 长指令。 */
 #define INBUF_SIZE                    2048
 /* sonoff modify end */
 #elif CONFIG_ATE_TEST
 #define INBUF_SIZE                    256
 #else
 /* sonoff modify start */
+/* 扩大命令接收缓冲区，容纳产测证书和 License 长指令。 */
 #define INBUF_SIZE                    2048
 /* sonoff modify end */
 #endif

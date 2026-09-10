@@ -37,6 +37,13 @@
         "condition_variable": "c",
         "system_error": "c",
         "freertosconfig.h": "c",
-        "sockets.h": "c"
+        "sockets.h": "c",
+        "random": "cpp",
+        "pm.h": "c",
+        "sonoff_private_item.h": "c",
+        "sonoff_nvdm_config.h": "c",
+        "sonoff_factory.h": "c",
+        "checksumutils.h": "c",
+        "sonoff_nvdm.h": "c"
     }
 }

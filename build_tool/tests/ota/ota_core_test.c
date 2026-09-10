@@ -15,7 +15,7 @@
 
 #include <arpa/inet.h>
 
-#include "../../sonoff/ota/sonoff_ota.c"
+#include "sonoff_ota.c"
 
 #define TEST_FLASH_SIZE (1492 * 1024)
 
