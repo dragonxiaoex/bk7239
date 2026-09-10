@@ -44,7 +44,7 @@ static const char *tag = "SNF-OTA-PARSE";
 /** @brief 顺序解析阶段. */
 typedef enum
 {
-    OTA_PARSE_METADATA = 0, /* 接收并校验公司包元数据头. */
+    OTA_PARSE_METADATA = 0, /* 接收并校验SONOFF元数据头. */
     OTA_PARSE_FILE,         /* 逐项接收文件属性，校验并选择目标文件. */
     OTA_PARSE_FILE_GAP,     /* 跳过目标文件之前的数据，推进到文件起点. */
     OTA_PARSE_GCM_IV,       /* 接收目标文件的IV，启动流式解密. */
@@ -139,11 +139,13 @@ static SnfOtaErrorCode otaParseFile(const uint8_t *data, uint32_t size, SnfOtaFi
     attributes_crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_ATTRIBUTES_CRC_OFFSET]);
     if ((snfCrc32(UINT32_MAX, data, OTA_FILE_ATTRIBUTES_CRC_OFFSET) ^ UINT32_MAX) != attributes_crc)
     {
+        LOG_I(tag, "file attributes crc check error");
         return SNF_OTA_ERROR_CHECK_FAILED;
     }
 
     if ((data[OTA_FILE_NAME_OFFSET] == 0) || (data[OTA_FILE_VERSION_OFFSET] == 0))
     {
+        LOG_I(tag, "file name or version is empty");
         return SNF_OTA_ERROR_INVALID_PARAM;
     }
 
@@ -156,6 +158,11 @@ static SnfOtaErrorCode otaParseFile(const uint8_t *data, uint32_t size, SnfOtaFi
     file->crc = OTA_GET_BIG_ENDIAN_DATA_4B(&data[OTA_FILE_CRC_OFFSET]);
     file->attributes_crc = attributes_crc;
     memcpy(file->reserved, &data[OTA_FILE_RESERVED_OFFSET], sizeof(file->reserved));
+    LOG_I(tag, "file name: %s", file->name);
+    LOG_I(tag, "file version: %s", file->version);
+    LOG_I(tag, "file offset: %u", file->offset);
+    LOG_I(tag, "file size: %u", file->size);
+    LOG_I(tag, "file crc: %u", file->crc);
 
     return SNF_OTA_ERROR_NONE;
 }
@@ -201,6 +208,7 @@ static SnfOtaErrorCode otaSelectFile(SnfOtaParseContext *context)
         context->file = file;
         /* 保留选中文件属性的原始字节，与元数据头一起参与GCM认证. */
         memcpy(&context->auth_header_data[SNF_OTA_META_HEAD_SIZE], context->buffer, SNF_OTA_META_FILE_SIZE);
+        LOG_I(tag, "matched file name: %s", file.name);
     }
 
     context->previous_end = file.offset + file.size;
@@ -369,11 +377,13 @@ SnfOtaErrorCode snfOtaParseInit(SnfOtaParseContext *context, uint32_t package_si
     /* 包至少包含元数据头、一项文件属性和非空文件，且OTA分区必须有可用容量. */
     if ((package_size <= (SNF_OTA_META_HEAD_SIZE + SNF_OTA_META_FILE_SIZE)) || (flash_size == 0))
     {
+        LOG_I(tag, "invalid package size or flash size");
         return context->error;
     }
 
     if ((file_name == NULL) || (file_name[0] == '\0'))
     {
+        LOG_I(tag, "invalid file name");
         return context->error;
     }
 
@@ -384,6 +394,10 @@ SnfOtaErrorCode snfOtaParseInit(SnfOtaParseContext *context, uint32_t package_si
     context->file_crc = UINT32_MAX;
     context->stage = OTA_PARSE_METADATA;
     context->error = SNF_OTA_ERROR_NONE;
+    LOG_I(tag, "image size: %d bytes", package_size);
+    LOG_I(tag, "want file name: %s", file_name);
+    LOG_I(tag, "flash size: %d bytes", flash_size);
+    LOG_I(tag, "wait metadata");
 
     return SNF_OTA_ERROR_NONE;
 }
@@ -408,10 +422,11 @@ SnfOtaErrorCode snfOtaParseData(SnfOtaParseContext *context, const uint8_t *data
         return context->error;
     }
 
-    /* offset以整个公司包为基准；先确认位置有效，再限制输入长度不得超过包内剩余字节数. */
+    /* offset以整个SONOFF包为基准；先确认位置有效，再限制输入长度不得超过包内剩余字节数. */
     if ((size == 0) || (context->package_size == 0) || (context->offset > context->package_size)
         || (size > (context->package_size - context->offset)))
     {
+        LOG_I(tag, "invalid offset or size");
         context->error = SNF_OTA_ERROR_INVALID_PARAM;
         return context->error;
     }
@@ -477,6 +492,7 @@ SnfOtaErrorCode snfOtaParseData(SnfOtaParseContext *context, const uint8_t *data
         context->error = otaParsePayload(context, data, take, payload);
         if (context->error != SNF_OTA_ERROR_NONE)
         {
+            LOG_I(tag, "parse payload failed");
             return context->error;
         }
         /* 解密缓冲区可能进一步缩短处理长度，输入进度必须以实际输出的镜像长度为准. */
@@ -516,13 +532,19 @@ SnfOtaErrorCode snfOtaParseFinish(const SnfOtaParseContext *context)
     /* 必须处理到整包末尾且已进入TAIL；否则目标文件内容或加密文件的TAG可能尚未收齐. */
     if ((context->offset != context->package_size) || (context->stage != OTA_PARSE_TAIL))
     {
+        LOG_I(tag, "image incomplete");
         return SNF_OTA_ERROR_IMAGE_INCOMPLETE;
     }
 
     /* 累计的是完整目标文件的明文CRC，最终异或后与文件属性中的CRC比较，通过后才允许应用升级. */
     if ((context->file_crc ^ UINT32_MAX) != context->file.crc)
     {
+        LOG_I(tag, "file crc check failed");
         return SNF_OTA_ERROR_CHECK_FAILED;
+    }
+    else
+    {
+        LOG_I(tag, "file crc check passed");
     }
 
     return SNF_OTA_ERROR_NONE;

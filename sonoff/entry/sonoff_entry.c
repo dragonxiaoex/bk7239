@@ -127,7 +127,7 @@ void sonoffEntry(void)
         extern void ChipTest(void);
         ChipTest();
 #endif
-        //vTaskDelay(3000 / portTICK_PERIOD_MS);
-        //bk_openthread_init();
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        bk_openthread_init();
     }
 }
