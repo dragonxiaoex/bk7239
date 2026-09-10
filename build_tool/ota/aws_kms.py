@@ -1,4 +1,3 @@
-# sonoff modify start
 """ECDSA P-256 signing through AWS CLI; no local private key is required."""
 
 import base64
@@ -12,7 +11,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 
-from .ecdsa import ECDSA256P1Public
+from imgtool.keys.ecdsa import ECDSA256P1Public
 
 
 class AwsKmsKey(ECDSA256P1Public):
@@ -63,4 +62,3 @@ class AwsKmsKey(ECDSA256P1Public):
 
     def sign(self, payload):
         return self.sign_digest(hashlib.sha256(payload).digest())
-# sonoff modify end

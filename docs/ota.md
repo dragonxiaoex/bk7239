@@ -1,6 +1,6 @@
 # OTA 升级架构与流程
 
-HTTP 与 Matter 共用 Sonoff OTA 核心。**不带 `SE=1` 编译普通固件，SDK 生成 `app_pack.rbl`；`SE=1` 编译安全固件，SDK 生成 `ota.bin` 和可直接写入 OTA 分区的 `ota_raw.bin`。外层打包选用普通构建的 `app_pack.rbl` 或安全构建的 `ota_raw.bin`，只读取所选原产物，另行输出 `ota_encrypted.bin`，不改写 SDK 原产物。**
+HTTP 与 Matter 共用 Sonoff OTA 核心。**不带 `SECURE=1` 编译普通固件，SDK 生成 `app_pack.rbl`；`SECURE=1` 编译安全固件，SDK 生成 `ota.bin` 和可直接写入 OTA 分区的 `ota_raw.bin`。外层打包选用普通构建的 `app_pack.rbl` 或安全构建的 `ota_raw.bin`，只读取所选原产物，另行输出 `ota_encrypted.bin`，不改写 SDK 原产物。**
 
 本篇以当前 `build_tool/config/bk7239n/` 配置、`sonoff/ota/` 实现及项目 SDK 覆盖代码为基线。C4 说明设备内外的职责边界，UML 说明接收、升级提交和重启后安装；尚未完成的渠道打包单独标明。
 
@@ -81,9 +81,9 @@ HTTP 和 Matter 共享同一核心会话；已有 OTA 任务时再次 `Start` �
 
 ### 3.1 普通构建与安全构建
 
-[config](../build_tool/config/bk7239n/config) 保存公共配置，普通配置位于 [normal/](../build_tool/config/bk7239n/normal/)，安全配置位于 [secure/](../build_tool/config/bk7239n/secure/)。Makefile 按 `SE` 组合对应配置到构建目录，再调用 SDK 原有编译流程。普通与安全构建分别使用 `build/` 和 `build/secure/`，隔离配置、缓存与产物。
+[config](../build_tool/config/bk7239n/config) 保存公共配置，普通配置位于 [normal/](../build_tool/config/bk7239n/normal/)，安全配置位于 [secure/](../build_tool/config/bk7239n/secure/)。Makefile 按 `SECURE` 组合对应配置到构建目录，再调用 SDK 原有编译流程。普通与安全构建分别使用 `build/` 和 `build/secure/`，隔离配置、缓存与产物。
 
-普通构建由 bootloader 根据 OTA 分区中的 RBL 头执行校验、解密、解压和安装，不使用 BL2 确认标志。以下配置表与签名说明仅适用于 `SE=1`：
+普通构建由 bootloader 根据 OTA 分区中的 RBL 头执行校验、解密、解压和安装，不使用 BL2 确认标志。以下配置表与签名说明仅适用于 `SECURE=1`：
 
 
 | 能力        | 当前配置与行为                                                                                                                       |
@@ -99,7 +99,9 @@ HTTP 和 Matter 共享同一核心会话；已有 OTA 任务时再次 `Start` �
 
 `CONFIG_OTA_HTTP=n` 控制 SDK 对应的 OTA HTTP 功能，不会关闭 Sonoff 自己的 HTTP 服务及上传接口。下载传输、应用层完整性检查和 BL2 签名验证是不同职责。
 
-签名侧使用 [AWS KMS 适配](../sonoff_modify/idk_modify/tools/env_tools/bksecure/tools/mcuboot_tools/imgtool/keys/aws_kms.py)调用签名服务，并用配置的公钥在本地验证返回签名。BL1 manifest 签名、应用镜像签名与 OTA 外层签名属于构建过程，设备接收过程不调用 KMS。
+签名侧使用 [AWS KMS 适配](../build_tool/ota/aws_kms.py)调用签名服务，并用配置的公钥在本地验证返回签名。Makefile 将 `build_tool/ota` 加入 `PYTHONPATH`，SDK 覆盖入口直接加载该脚本。BL1 manifest 签名、应用镜像签名与 OTA 外层签名属于构建过程，设备接收过程不调用 KMS。
+
+OTA 脚本通过自身所在位置定位项目文件，签名配置使用相对文件名。[Matter 打包脚本](../build_tool/ota/pack_matter_ota.py) 也从当前项目中的 SDK 加载 Python TLV 模块，不依赖固定的用户目录或预先设置 `PYTHONPATH`。命令行传入的相对输入、输出路径按执行命令时的工作目录解释。
 
 ### 3.2 基础包与发布产物
 
@@ -125,8 +127,8 @@ ota.bin
 | `ota.bin`        | `PACK_OTA_BIN` 生成的基础 BK OTA 包，包含传输头和签名压缩镜像               |
 | `app_pack.rbl` | 普通构建的原始 OTA 包，含 96 字节 RBL 头和固件数据 |
 | `ota_raw.bin` | 安全构建由 SDK `PACK_RAW_OTA_BIN` 生成的可直接写入 OTA 分区的镜像 |
-| `ota_encrypted.bin` | 对 `SE` 对应的可直接写入产物添加公司封装及 AES-256-GCM 加密，供 HTTP 上传或继续添加渠道头 |
-| Matter 渠道包       | 由 Matter 工具在 `ota_encrypted.bin` 外添加 Matter 头；当前构建尚未自动生成 |
+| `ota_encrypted.bin` | 对 `SECURE` 对应的可直接写入产物添加 OTA 封装及 AES-256-GCM 加密，供 HTTP 上传或继续添加渠道头 |
+| `ota_matter.ota` | 构建自动调用 `pack_matter_ota.py`，在 `ota_encrypted.bin` 外添加 Matter 头，用于 Matter 升级 |
 
 
 
@@ -205,20 +207,26 @@ GCM 的 AAD 为原始 24 字节元数据头拼接当前文件的完整 76 字节
 头文件缺失或密钥数组格式、长度不正确时，加密打包报错。后续版本继续使用该头文件中的同一密钥；每次打包仍为每个文件生成独立随机 IV。首次部署加密支持的固件仍需通过设备当时支持的烧录或未加密升级路径完成。
 
 ```sh
-# 普通固件：SDK生成app_pack.rbl，再从该原产物生成外层加密包
-make -C build_tool MODEL=onoff_plug
+cd build_tool
+# 普通固件：SDK生成app_pack.rbl，再依次生成HTTP和Matter升级包
+make MODEL=onoff_plug
 
-# 安全固件：SDK生成ota_raw.bin，再从该原产物生成外层加密包
-make -C build_tool MODEL=onoff_plug SE=1
+# 安全固件：SDK生成ota_raw.bin，再依次生成HTTP和Matter升级包
+make MODEL=onoff_plug SECURE=1
 
-# 只做外层打包，SE必须与原产物的构建模式一致
-make -C build_tool MODEL=onoff_plug ota_package
-make -C build_tool MODEL=onoff_plug SE=1 ota_package
+# 发布用途：仅将导出文件名中的TEST改为FACTORY
+make MODEL=onoff_plug SECURE=1 release
+
+# 对现有产物重新打包和导出，SECURE必须与原产物的构建模式一致
+make MODEL=onoff_plug ota_package
+make MODEL=onoff_plug SECURE=1 ota_package
 ```
 
-普通构建输出 `build/bk7239n/onoff_plug/package/ota_encrypted.bin`，安全构建输出 `build/secure/bk7239n/onoff_plug/package/ota_encrypted.bin`。Makefile 根据 `SE` 明确选择原始 `app_pack.rbl` 或 `ota_raw.bin`，不按文件是否存在或构建摘要猜测。封装内逻辑文件名统一为 `ota.bin`，实际内容为平台提供的可直接写入镜像；联合版本和文件版本取自 `SONOFF_SOFTWARE_VERSION_STRING`。原始 OTA 文件和烧录文件均保留不变。加密封装完成后，Matter 渠道仍需在该文件外添加 Matter 头。
+普通构建产物位于 `build/bk7239n/onoff_plug/package/`，安全构建位于 `build/secure/bk7239n/onoff_plug/package/`。Makefile 根据 `SECURE` 选择原始 `app_pack.rbl` 或 `ota_raw.bin`，由 [package_firmware.py](../build_tool/ota/package_firmware.py) 顺序调用 `pack_ota.py`、`pack_matter_ota.py`，生成 HTTP 等通道使用的 `ota_encrypted.bin` 和 Matter 使用的 `ota_matter.ota`。两层打包均成功后，将 SDK 的 `all-app.bin` 和两种升级包复制到 `build/out/flash/`、`build/out/http/`、`build/out/matter/`，使用项目命名和同一构建时间戳，原始 SDK 文件保持不变。命名格式与 `release` 用法见 [编译说明](build.md)。
 
-需要未加密封装时，可显式指定：
+封装内逻辑文件名统一为 `ota.bin`，内容为完整平台镜像；联合版本和文件版本取自 `SONOFF_SOFTWARE_VERSION_STRING`。Matter 头的 VID/PID 取自项目头文件的 `SONOFF_MATTER_VENDOR_ID`、`SONOFF_MATTER_PRODUCT_ID`，必须匹配目标设备；数字版本和版本字符串分别取自 `SONOFF_MATTER_SOFTWARE_VERSION`、`SONOFF_MATTER_SOFTWARE_VERSION_STRING`。Matter 包的载荷完整保留 HTTP 包，使用 SHA-256 摘要。
+
+需要未加密封装时，在项目根目录显式指定：
 
 ```sh
 python3 build_tool/ota/pack_ota.py pack --cipher none \
@@ -374,7 +382,7 @@ sequenceDiagram
 
 普通构建使用 [normal/auto_partitions.csv](../build_tool/config/bk7239n/normal/auto_partitions.csv)：bootloader 位于 `0x000000`、68 KiB；应用位于 `0x011000`、2380 KiB；OTA 分区位于 `0x264000`、1496 KiB。运行时始终从 SDK 获取分区容量。
 
-以下为 [安全构建分区表](../build_tool/config/bk7239n/secure/partitions.csv)中的物理 Flash 地址，仅在 `SE=1` 时适用：
+以下为 [安全构建分区表](../build_tool/config/bk7239n/secure/partitions.csv)中的物理 Flash 地址，仅在 `SECURE=1` 时适用：
 
 
 | 分区                 | 物理起始地址     | 大小       | 用途                                        |
@@ -398,4 +406,4 @@ sequenceDiagram
 
 接手时先验证渠道包解析和落盘布局，再验证提交标志及 BL2 安装；不能仅以网页上传成功或 `SNF_OTA_STATE_SUCCESS` 作为升级完成依据。错误码和状态回调需结合两个阶段的日志定位：应用侧负责传输/Flash/提交错误，BL2 负责信任验证和安装结果。
 
-主机回归运行 `python3 tests/ota/test_ota.py`，覆盖头部任意分块、文件选择、CRC 错误、越界、截断、会话重启、加密打包与解密、GCM 篡改拒绝、固定密钥读取、任意文件原样落盘、分区容量边界以及 SE 构建配置和 SDK 原产物选择。测试使用实际 OTA 核心、解析器、AES-GCM 适配及 SDK CRC/GCM 实现，队列调度与 Flash 为替身；板端 HTTP/Matter 传输和 BL2 安装仍需实机验证。
+主机回归运行 `python3 tests/ota/test_ota.py`，覆盖头部任意分块、文件选择、CRC 错误、越界、截断、会话重启、加密打包与解密、GCM 篡改拒绝、固定密钥读取、任意文件原样落盘、分区容量边界以及 SECURE 构建配置和 SDK 原产物选择。测试使用实际 OTA 核心、解析器、AES-GCM 适配及 SDK CRC/GCM 实现，队列调度与 Flash 为替身；板端 HTTP/Matter 传输和 BL2 安装仍需实机验证。

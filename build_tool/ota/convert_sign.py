@@ -1,3 +1,5 @@
+"""将安全构建配置中的签名公钥转换为 BL2 固定公钥头文件。"""
+
 from pathlib import Path
 from datetime import date
 import csv
@@ -12,7 +14,7 @@ args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 with (root / 'build_tool/config/bk7239n/secure/security.csv').open() as config:
     settings = dict(list(csv.reader(config))[1:])
-source = Path(settings['img_sign_pubkey'])
+source = root / 'build_tool/sign' / settings['img_sign_pubkey']
 target = root / 'sonoff_modify/idk_modify/components/bk_mcuboot/bl2/components/mcuboot/src/sonoff_trusted_pubkey.h'
 key = serialization.load_pem_public_key(source.read_bytes(), backend=default_backend())
 if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):

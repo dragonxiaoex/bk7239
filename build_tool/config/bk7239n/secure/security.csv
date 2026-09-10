@@ -4,8 +4,8 @@ flash_crc_en,TRUE
 flash_aes_type,NONE
 flash_aes_key,
 img_sign_key_type,ec256
-img_sign_pubkey,/home/xt/sonoff/bk7239n/sonoff_openthread/build_tool/sign/aws_kms_public.pem
-img_sign_privkey,/home/xt/sonoff/bk7239n/sonoff_openthread/build_tool/sign/aws_kms_signer.json
+img_sign_pubkey,aws_kms_public.pem
+img_sign_privkey,aws_kms_signer.json
 new_img_sign_pubkey,
 new_img_sign_privkey,
 update_img_sign_key_en,FALSE

@@ -23,21 +23,21 @@ Matter OTA (Over-the-air update) image utility.
 Usage examples:
 
 Creating OTA image file:
-./ota_image_tool.py create -v 0xDEAD -p 0xBEEF -vn 1 -vs "1.0" -da sha256 my-firmware.bin my-firmware.ota
+./pack_matter_ota.py create -v 0xDEAD -p 0xBEEF -vn 1 -vs "1.0" -da sha256 my-firmware.bin my-firmware.ota
 
 Showing OTA image file info:
-./ota_image_tool.py show my-firmware.ota
+./pack_matter_ota.py show my-firmware.ota
 """
 
 import argparse
 import hashlib
-import os
+from pathlib import Path
 import struct
 import sys
 from enum import IntEnum
 
-sys.path.insert(0, os.path.join(
-    os.path.dirname(__file__), '../controller/python'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]
+                       / 'bk_openthread/components/matter/connectedhomeip/src/controller/python'))
 from matter.tlv import TLVReader, TLVWriter, uint  # noqa: E402 isort:skip
 
 HEADER_MAGIC = 0x1BEEF11E

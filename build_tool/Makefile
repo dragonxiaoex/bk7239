@@ -1,6 +1,7 @@
 # Build from this directory:
 #   make MODEL=onoff_plug
-#   make MODEL=onoff_plug SE=1
+#   make MODEL=onoff_plug SECURE=1
+#   make MODEL=onoff_plug SECURE=1 release
 #   make MODEL=onoff_plug SOC=bk7239n
 #   make MODEL=onoff_plug SOC=bk7239n menuconfig
 #   make MODEL=onoff_plug clean
@@ -17,17 +18,17 @@ IDK_OVERLAY     := $(OVERLAY_ROOT)/idk_modify
 MATTER_OVERLAY  := $(OVERLAY_ROOT)/matter_modify
 OPENTHREAD_OVERLAY := $(OVERLAY_ROOT)/openthread_modify
 ADAPTER_OVERLAY := $(OVERLAY_ROOT)/adapter_modify
-SE              ?= 0
-ifeq ($(SE),1)
+SECURE          ?= 0
+ifeq ($(SECURE),1)
 BUILD_VARIANT   := secure
 BUILD_DIR       := $(ROOT)/build/secure
 OTA_INPUT_NAME  := ota_raw.bin
-else ifeq ($(SE),0)
+else ifeq ($(SECURE),0)
 BUILD_VARIANT   := normal
 BUILD_DIR       := $(ROOT)/build
 OTA_INPUT_NAME  := app_pack.rbl
 else
-$(error SE must be 0 or 1)
+$(error SECURE must be 0 or 1)
 endif
 CHIP_DIR        := $(SDK_DIR)/components/matter/connectedhomeip
 OPENTHREAD_DIR  := $(SDK_DIR)/components/openthread
@@ -36,8 +37,14 @@ COMMON_CMAKE    := $(BUILD_TOOL_DIR)/CMakeLists.txt
 COMMON_CONFIG   := $(BUILD_TOOL_DIR)/config
 COMMON_MATTER   := $(BUILD_TOOL_DIR)/matter
 PRODUCT_CMAKE   := $(BUILD_TOOL_DIR)/product/CMakeLists.txt
-OTA_PACK_TOOL   := $(BUILD_TOOL_DIR)/ota/pack_ota.py
+FIRMWARE_PACK_TOOL := $(BUILD_TOOL_DIR)/ota/package_firmware.py
 OTA_KEY_HEADER  := $(ROOT)/sonoff/ota/sonoff_ota_key.h
+OUT_DIR         := $(ROOT)/build/out
+BUILD_TIMESTAMP := $(shell date +%Y%m%d.%H%M%S.%3N)
+OUTPUT_PURPOSE  := $(if $(filter release,$(MAKECMDGOALS)),FACTORY,TEST)
+
+# SDK signing entry points import project scripts without copying them into the SDK.
+export PYTHONPATH := $(BUILD_TOOL_DIR)/ota$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 SOC             ?= bk7239n
 
@@ -53,17 +60,20 @@ PROJECT_DIR     := $(BUILD_DIR)/project_tree/$(MODEL)
 MODE_CONFIG_DIR := $(COMMON_CONFIG)/$(SOC)/$(BUILD_VARIANT)
 PROJECT_CONFIG_DIR := $(PROJECT_DIR)/config/$(SOC)
 
-.PHONY: all build menuconfig clean restore help apply_overlay prepare_project ota_package
+.PHONY: all build release menuconfig clean restore help apply_overlay prepare_project ota_package
 
 all: build
+
+release: build
 
 help:
 	@echo ""
 	@echo "  make MODEL=<name>              build normal firmware (default SOC=$(SOC))"
-	@echo "  make MODEL=<name> SE=1         build secure firmware under build/secure"
+	@echo "  make MODEL=<name> SECURE=1     build secure firmware under build/secure"
 	@echo "  make MODEL=<name> SOC=bk7239n  build for a specific SoC"
-	@echo "  build also creates package/ota_encrypted.bin using sonoff_ota_key.h"
-	@echo "  make MODEL=<name> [SE=1] ota_package wrap app_pack.rbl (normal) or ota_raw.bin (secure)"
+	@echo "  append release to label exported filenames FACTORY (default: TEST)"
+	@echo "  build packages HTTP then Matter OTA and exports flash/http/matter under build/out"
+	@echo "  make MODEL=<name> [SECURE=1] ota_package package and export existing SDK outputs"
 	@echo "  make MODEL=<name> menuconfig   configure project (default SOC=$(SOC))"
 	@echo "  make MODEL=<name> clean        remove that project's build output"
 	@echo "  make restore                   restore bk_openthread / bk_idk via git"
@@ -108,6 +118,9 @@ define assemble_project
 	mkdir -p "$(PROJECT_CONFIG_DIR)"; \
 	cp -f "$(MODE_CONFIG_DIR)"/* "$(PROJECT_CONFIG_DIR)/"; \
 	cat "$(COMMON_CONFIG)/$(SOC)/config" "$(MODE_CONFIG_DIR)/config" > "$(PROJECT_CONFIG_DIR)/config"; \
+	if [ "$(SECURE)" = "1" ]; then \
+		cp -f "$(BUILD_TOOL_DIR)/sign/"*.pem "$(BUILD_TOOL_DIR)/sign/"*.json "$(PROJECT_CONFIG_DIR)/"; \
+	fi; \
 	ln -sfn "$(PRODUCT_CMAKE)" "$(PROJECT_DIR)/components/main/CMakeLists.txt"; \
 	ln -sfn "$(SONOFF_DIR)" "$(PROJECT_DIR)/components/main/sonoff"; \
 	if [ -d "$(PROJECT_SRC)/src" ]; then \
@@ -168,11 +181,12 @@ prepare_project:
 	$(call assemble_project)
 
 ota_package:
-	@python3 "$(OTA_PACK_TOOL)" pack \
+	@python3 "$(FIRMWARE_PACK_TOOL)" \
 		--key-header "$(OTA_KEY_HEADER)" \
 		--input "$(BUILD_DIR)/$(SOC)/$(MODEL)/package/$(OTA_INPUT_NAME)" \
-		--output "$(BUILD_DIR)/$(SOC)/$(MODEL)/package/ota_encrypted.bin" \
-		--version-header "$(PROJECT_SRC)/inc/sonoff_project_config.h"
+		--factory "$(BUILD_DIR)/$(SOC)/$(MODEL)/package/all-app.bin" \
+		--project-header "$(PROJECT_SRC)/inc/sonoff_project_config.h" \
+		--out-dir "$(OUT_DIR)" --timestamp "$(BUILD_TIMESTAMP)" --purpose "$(OUTPUT_PURPOSE)"
 
 build: prepare_project
 	@set -e; \
@@ -182,7 +196,7 @@ build: prepare_project
 	$(call overlay_copy,$(MATTER_OVERLAY),$(SDK_DIR)/components/matter); \
 	$(call overlay_copy,$(OPENTHREAD_OVERLAY),$(OPENTHREAD_DIR)); \
 	$(call overlay_copy,$(ADAPTER_OVERLAY),$(SDK_DIR)/components/adapter); \
-	echo "[sonoff] MODEL=$(MODEL) SOC=$(SOC) SE=$(SE) ($(BUILD_VARIANT))"; \
+	echo "[sonoff] MODEL=$(MODEL) SOC=$(SOC) SECURE=$(SECURE) ($(BUILD_VARIANT))"; \
 	echo "[sonoff] PROJECT_DIR=$(PROJECT_DIR)"; \
 	export SONOFF_ROOT="$(ROOT)"; \
 	export MODEL="$(MODEL)"; \
@@ -190,7 +204,8 @@ build: prepare_project
 		PROJECT="$(MODEL)" \
 		PROJECT_DIR="$(PROJECT_DIR)" \
 		BUILD_DIR="$(BUILD_DIR)"; \
-	$(MAKE) -f "$(BUILD_TOOL_DIR)/Makefile" MODEL="$(MODEL)" SOC="$(SOC)" SE="$(SE)" ota_package
+	$(MAKE) -f "$(BUILD_TOOL_DIR)/Makefile" MODEL="$(MODEL)" SOC="$(SOC)" SECURE="$(SECURE)" \
+		BUILD_TIMESTAMP="$(BUILD_TIMESTAMP)" OUTPUT_PURPOSE="$(OUTPUT_PURPOSE)" ota_package
 
 menuconfig: prepare_project
 	@set -e; \

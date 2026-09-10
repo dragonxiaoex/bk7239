@@ -75,9 +75,9 @@ def bl1_sign(action_type, key_type, privkey_pem_file, pubkey_pem_file, signature
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
         sys.path.insert(0, str(Path(get_script_dir()).parent / 'tools/mcuboot_tools'))
-        from imgtool.keys.aws_kms import AwsKmsKey
+        from imgtool import keys
 
-        kms_key = AwsKmsKey(privkey_pem_file)
+        kms_key = keys.load(privkey_pem_file)
         public_key = serialization.load_pem_public_key(Path(pubkey_pem_file).read_bytes())
         public_der = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
         if key_type != 'ec256' or public_der != kms_key.get_public_bytes():

@@ -45,7 +45,7 @@ def load(path, passwd=None):
     """Try loading a key from the given path.  Returns None if the password wasn't specified."""
     # sonoff modify start
     if str(path).endswith('.json'):
-        from .aws_kms import AwsKmsKey
+        from aws_kms import AwsKmsKey
         return AwsKmsKey(path)
     # sonoff modify end
     with open(path, 'rb') as f:

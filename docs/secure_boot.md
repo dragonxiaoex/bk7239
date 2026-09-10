@@ -48,17 +48,17 @@ KMS 非对称密钥的公钥可以导出，私钥由 KMS 管理；导出的公�
 | --- | --- | --- |
 | 构建端 | 构建入口 | [Makefile](../build_tool/Makefile) 组装私有项目，应用 `sonoff_modify` 覆盖，调用 SDK 构建 |
 | 构建端 | 安全打包调度 | [PackAll](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_all.py) 与 [PackJson](../bk_openthread/bk_idk/tools/env_tools/bksecure/scripts/pack_json.py) 按 CSV 和 `pack.json` 生成镜像 |
-| 构建端 | KMS 签名器 | [AwsKmsKey](../sonoff_modify/idk_modify/tools/env_tools/bksecure/tools/mcuboot_tools/imgtool/keys/aws_kms.py) 校验配置、请求签名并本地验签 |
+| 构建端 | KMS 签名器 | [AwsKmsKey](../build_tool/ota/aws_kms.py) 校验配置、请求签名并本地验签 |
 | 构建端 | 密钥加载适配 | [keys.load](../sonoff_modify/idk_modify/tools/env_tools/bksecure/tools/mcuboot_tools/imgtool/keys/__init__.py) 将 `.json` 签名器配置加载为 `AwsKmsKey` |
 | 构建端 | BL1 manifest 签名 | [bl1_sign.py](../sonoff_modify/idk_modify/tools/env_tools/bksecure/scripts/bl1_sign.py) 导出 manifest 摘要、请求 KMS、回填签名并验签 |
 | 构建端 | 应用 / OTA 镜像签名 | [imgtool/image.py](../sonoff_modify/idk_modify/tools/env_tools/bksecure/tools/mcuboot_tools/imgtool/image.py) 组装镜像头及 TLV，调用签名器 |
-| 构建端 | BL2 公钥生成 | [convert_sign.py](../build_tool/sign/convert_sign.py) 将配置公钥转换为 BL2 的 C 数组 |
+| 构建端 | BL2 公钥生成 | [convert_sign.py](../build_tool/ota/convert_sign.py) 将配置公钥转换为 BL2 的 C 数组 |
 | 设备端 | BL1 | 按硬件安全启动配置验证 manifest 及其中记录的 BL2 内容 |
 | 设备端 BL2 | 公钥选择 | [ow_pubkey.c](../sonoff_modify/idk_modify/components/bk_mcuboot/bl2/components/mcuboot/src/ow_pubkey.c) 的 `bk_find_key()` 检查镜像公钥是否匹配固定公钥 |
 | 设备端 BL2 | 镜像验签 | [image_validate.c](../bk_openthread/bk_idk/components/bk_mcuboot/bl2/components/mcuboot/bootutil/src/image_validate.c) 验证镜像摘要和 ECDSA 签名 |
 | 设备端 BL2 | 覆盖安装 | [ow_loader.c](../bk_openthread/bk_idk/components/bk_mcuboot/bl2/components/mcuboot/src/ow_loader.c) 与 [decompress_bl2.c](../bk_openthread/bk_idk/components/bk_mcuboot/bl2/components/mcuboot/src/decompress_bl2.c) 验证 OTA 外层、解压覆盖、验证主镜像 |
 
-SDK 扩展的持久修改位于 `sonoff_modify/idk_modify/`。Makefile 构建时将覆盖文件复制到 `bk_openthread/bk_idk/`，退出时恢复 SDK；维护时应修改覆盖文件。
+KMS 签名实现、公钥转换脚本和离线测试集中在 `build_tool/ota/`，签名配置与公钥位于 `build_tool/sign/`。Makefile 将 `build_tool/ota/` 加入 `PYTHONPATH`，供 SDK 的签名子进程加载。SDK 所需的加载入口与镜像处理适配位于 `sonoff_modify/idk_modify/`；构建时应用覆盖，退出时恢复 SDK。`aws_kms.py` 本身不复制到 SDK 中。
 
 ## 3. 密钥、公钥与信任关系
 
@@ -72,7 +72,7 @@ SDK 扩展的持久修改位于 `sonoff_modify/idk_modify/`。Makefile 构建时
 | [sonoff_trusted_pubkey.h](../sonoff_modify/idk_modify/components/bk_mcuboot/bl2/components/mcuboot/src/sonoff_trusted_pubkey.h) | `TRUSTED_PUBKEY_DER` 固定公钥数组 | BL2 的 `bk_find_key()` |
 | 构建产物 `otp_efuse_config.json` | 平台格式的信任根摘要、安全开关及生命周期配置 | 硬件部署工具 |
 
-`security.csv` 中名称为 `img_sign_privkey` 的字段，当前填写的是 **KMS 签名器 JSON 路径**，不包含私钥，也不直接填写 ARN。JSON 中的 `public_key` 相对于该 JSON 所在目录解析；`security.csv` 的密钥路径按当前配置使用绝对路径，不展开 `~` 或 shell 变量。
+`security.csv` 中名称为 `img_sign_privkey` 的字段，当前填写的是 **KMS 签名器 JSON 文件名**，不包含私钥，也不直接填写 ARN。公钥与签名配置分别填写 `aws_kms_public.pem`、`aws_kms_signer.json`。安全构建将 `build_tool/sign/` 中的 PEM、JSON 文件复制到生成的项目配置目录，再由 SDK 复制到预构建和打包目录，按相对文件名读取。JSON 中的 `public_key` 相对于该 JSON 所在目录解析；`convert_sign.py` 从项目的 `build_tool/sign/` 读取配置指定的公钥。源码配置不依赖本机用户目录，不展开 `~` 或 shell 变量。
 
 当前签名器使用区域 `ap-southeast-2` 和 profile `firmware`，Key ARN 以配置文件为准。适配器要求完整的 `key/...` ARN、ARN 区域与 `region` 一致、公钥曲线为 P-256。
 
@@ -301,25 +301,27 @@ aws login --profile firmware --region ap-southeast-2 --remote
 aws sts get-caller-identity --profile firmware --region ap-southeast-2 --no-cli-pager
 ```
 
-BL2 公钥头文件已经存在，正常构建无需重新生成。初次生成的入口是 `python build_tool/sign/convert_sign.py`；确需按当前公钥重新生成时使用 `--replace`。该脚本只更新构建侧头文件，不写入设备 OTP/eFuse。
+BL2 公钥头文件已经存在，正常构建无需重新生成。初次生成的入口是 `python build_tool/ota/convert_sign.py`；确需按当前公钥重新生成时使用 `--replace`。该脚本只更新构建侧头文件，不写入设备 OTP/eFuse。
 
 ### 7.3 构建与离线检查
 
 在已准备好 Python 环境和 AWS profile 的终端，从项目根目录执行：
 
 ```bash
-make -C build_tool MODEL=onoff_plug SE=1 SOC=bk7239n
+make -C build_tool MODEL=onoff_plug SECURE=1 SOC=bk7239n
 ```
 
-默认产物目录是 `build/bk7239n/onoff_plug/package/`。打包时自动执行 KMS 签名，不需要手工向镜像末尾追加签名，也不需要单独运行分步摘要回填命令。
+安全构建产物目录是 `build/secure/bk7239n/onoff_plug/package/`。Makefile 自动设置签名脚本的 `PYTHONPATH`，打包时执行 KMS 签名，不需要手工向镜像末尾追加签名，也不需要单独运行分步摘要回填命令。
+
+Makefile 和脚本根据自身位置定位项目目录；更换源码目录后应重新构建，生成新的配置和路径。新编译环境仍需安装工具链、Python 依赖和 AWS CLI，并配置签名所用的 AWS profile。原厂 SDK 默认工具链目录为 `/opt/gcc-arm-none-eabi-10.3-2021.10/bin`，安装位置不同时需要配置工具链路径。
 
 签名适配器的离线测试入口如下，测试用桩替换 AWS CLI 调用：
 
 ```bash
-python build_tool/sign/test_aws_kms_sign.py
+python build_tool/ota/test_aws_kms_sign.py
 ```
 
-该测试覆盖摘要只计算一次、AWS 调用失败、错误密钥签名、应答 Key ARN/算法不符、摘要长度错误和公钥曲线错误。
+该测试覆盖摘要只计算一次、AWS 调用失败、错误密钥签名、应答 Key ARN/算法不符、摘要长度错误和公钥曲线错误，并验证普通/安全构建的脚本导入路径、PEM 密钥加载、应用镜像签名验签和 BL1 主备 manifest 签名。迁移测试将项目复制到新目录，从其他工作目录验证配置准备、公钥转换、OTA 加密封装及 Matter 打包与提取。SDK 工具复制到临时目录执行，AWS CLI 调用由离线签名桩替代。
 
 ## 8. 硬件部署与当前验证范围
 
@@ -329,7 +331,7 @@ python build_tool/sign/test_aws_kms_sign.py
 
 | 检查范围 | 本次结果 / 状态 |
 | --- | --- |
-| KMS 签名适配器 | 6 项离线测试通过 |
+| KMS 签名适配器及脚本路径 | 11 项离线测试通过，包含项目目录迁移 |
 | 公钥一致性 | `security.csv` 公钥、签名器公钥、BL2 固定公钥一致，均为 P-256、91 字节 SPKI DER |
 | 构建、打包和 BL2 验签路径 | 已按当前源码与配置核对 |
 | 真实 KMS 调用及完整固件重建 | 本次整理文档未重新执行 |

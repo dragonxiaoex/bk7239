@@ -92,18 +92,19 @@ def pack_files(files, model_version, key):
     return head + b"".join(entries) + b"".join(contents)
 
 
-def read_version(header):
-    match = re.search(r'^\s*#define\s+SONOFF_SOFTWARE_VERSION_STRING\s+"([^"]+)"',
+def read_define(header, name):
+    """读取项目配置中的字符串或整数宏。"""
+    match = re.search(r'^\s*#define\s+' + re.escape(name) + r'\s+(?:"([^"\r\n]+)"|(\S+))',
                       Path(header).read_text(), re.MULTILINE)
     if match is None:
-        raise ValueError("SONOFF_SOFTWARE_VERSION_STRING not found")
-    return match.group(1)
+        raise ValueError(f"{name} not found in {header}")
+    return match.group(1) if match.group(1) is not None else match.group(2)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    pack = commands.add_parser("pack", help="对原始文件加密并生成公司外层OTA包")
+    pack = commands.add_parser("pack", help="对原始文件加密并生成带封装的OTA包")
     pack.add_argument("--input", type=Path, required=True)
     pack.add_argument("--output", type=Path, required=True)
     pack.add_argument("--key-header", type=Path,
@@ -119,7 +120,8 @@ def main():
         if source.resolve() == args.output.resolve():
             raise ValueError("Output must differ from the input file")
         key = None if args.cipher == "none" else read_key(args.key_header)
-        version = args.version if args.version is not None else read_version(args.version_header)
+        version = args.version if args.version is not None else read_define(
+            args.version_header, "SONOFF_SOFTWARE_VERSION_STRING")
         plain = source.read_bytes()
         output = pack_files([("ota.bin", version, plain)], version, key)
         write_file(args.output, output)

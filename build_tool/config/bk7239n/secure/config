@@ -1,4 +1,4 @@
-# Secure firmware: make MODEL=onoff_plug SE=1
+# Secure firmware: make MODEL=onoff_plug SECURE=1
 CONFIG_SECURITY_FIRMWARE=y
 CONFIG_TFM=n
 CONFIG_BL2=y
