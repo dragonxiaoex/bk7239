@@ -1,0 +1,1709 @@
+/**
+ * @file    sonoff_cli.c
+ * @brief   Sonoff串口工具箱命令模块
+ *
+ * @author  yifei wang (yifei.wang@itead.cc)
+ * @date    2026-08-28
+ *
+ * @copyright Copyright (c) 2026  深圳松诺技术有限公司
+ *
+ */
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <FreeRTOS.h>
+#include <semphr.h>
+#include <task.h>
+
+#include "cli.h"
+
+#include "sonoff_cli.h"
+#include "sonoff_common.h"
+#include "sonoff_log.h"
+#include "sonoff_net_test.h"
+#include "sonoff_nvdm.h"
+#include "sonoff_wifi.h"
+#include "sonoff_project_config.h"
+#include "sonoff_sha256.h"
+
+static const char *tag = "SNF-CLI";
+
+#define SNF_WIFI_CLI_AP_CHANNEL          1U
+#define SNF_WIFI_CLI_AP_MAX_CONNECTIONS  4U
+#define SNF_WIFI_CLI_SCAN_RESULT_MAX     10U
+#define SNF_WIFI_CLI_SCAN_ONCE_MAX       15U
+#define SNF_WIFI_CLI_SCAN_WAIT_MS        5000U
+
+/** @brief vTaskList单行缓冲长度. */
+#define SNF_CLI_TASK_LIST_LINE_SIZE      (configMAX_TASK_NAME_LEN + 18)
+
+#define AT_MASTER_CHIP_NAME              "BK723x"
+#define AT_CMD_MASTER_CHIP_ID            "AT+MASTER_CHIP_ID"
+#define AT_CMD_MASTER_CHIP_ID_QUERY      "AT+MASTER_CHIP_ID?"
+#define AT_CMD_FW_VER                    "AT+FW_VER"
+#define AT_CMD_FW_VER_QUERY              "AT+FW_VER?"
+#define AT_CMD_MT_SERIAL_NUM             "AT+MT_SERIAL_NUM"
+#define AT_CMD_MT_SERIAL_NUM_QUERY       "AT+MT_SERIAL_NUM?"
+#define AT_CMD_MT_SERIAL_NUM_SET         "AT+MT_SERIAL_NUM_SET"
+#define AT_CMD_MT_FACTORY_DATA_WRITE     "AT+MT_FACTORY_DATA_WRITE"
+#define AT_CMD_MT_FACTORY_DATA_READ      "AT+MT_FACTORY_DATA_READ"
+#define AT_CMD_ACTIVE_CODE               "AT+ACTIVE_CODE"
+#define AT_CMD_ACTIVE_CODE_QUERY         "AT+ACTIVE_CODE?"
+#define AT_CMD_LICENSE_WRITE             "AT+LICENSE_WRITE"
+#define AT_CMD_LICENSE_READ              "AT+LICENSE_READ"
+#define AT_CMD_LICENSE_READ_QUERY        "AT+LICENSE_READ?"
+#define AT_CMD_LICENSE_DELETE            "AT+LICENSE_DELETE"
+#define AT_CMD_MT_CD_WRITE               "AT+MT_CD_WRITE"
+#define AT_CMD_MT_CD_READ                "AT+MT_CD_READ"
+#define AT_CMD_MT_CD_DELETE              "AT+MT_CD_DELETE"
+#define AT_CMD_MT_PUB_KEY_GET            "AT+MT_PUB_KEY_GET"
+#define AT_CMD_MT_PUB_KEY_SET            "AT+MT_PUB_KEY_SET"
+#define AT_CMD_MT_SECURE_CERT_WRITE      "AT+MT_SECURE_CERT_WRITE"
+#define AT_CMD_MT_SECURE_CERT_READ       "AT+MT_SECURE_CERT_READ"
+#define AT_CMD_MT_SECURE_CERT_DELETE     "AT+MT_SECURE_CERT_DELETE"
+#define AT_MT_FACTORY_DATA_FIELD_NUM     10
+#define AT_MT_FACTORY_DATA_WRITE_ARGC    12
+#define AT_MT_FACTORY_DATA_SHA256_HEX_LEN 64
+#define AT_LICENSE_JSON_MAX_LEN          512
+
+/**
+ * @brief Sonoff工具箱子命令处理函数.
+ */
+typedef void (*SnfCliHandler)(int argc, char **argv);
+
+/**
+ * @brief Sonoff工具箱子命令表项.
+ */
+typedef struct
+{
+    const char *name;           /* 子命令名称 */
+    const char *help;           /* 子命令说明 */
+    SnfCliHandler handler;      /* 子命令处理函数 */
+    void (*print_help)(void);   /* 子命令帮助打印函数 */
+} SnfCliEntry;
+
+/**
+ * @brief Matter工厂数据单项写入函数.
+ */
+typedef int (*AtMatterItemSet)(const char *value);
+
+/** @brief 启动阶段产测应答等待状态. */
+typedef struct
+{
+    SemaphoreHandle_t reply_sem;
+    TickType_t start_ticks;
+    TickType_t timeout_ticks;
+} SnfFactoryReplyState;
+
+static SnfFactoryReplyState factory_reply_state = {0};
+
+/**
+ * @brief 打印WIFI测试命令帮助.
+ */
+static void snfWifiCliPrintHelp(void)
+{
+    printf("sonoff wifi sta <ssid> <password>\r\n");
+    printf("sonoff wifi ap <ssid> <password>\r\n");
+    printf("sonoff wifi sta_disconnect\r\n");
+    printf("sonoff wifi ap_stop\r\n");
+    printf("sonoff wifi scan\r\n");
+    printf("sonoff wifi scan_results\r\n");
+    printf("sonoff wifi status\r\n");
+    printf("sonoff wifi rssi\r\n");
+}
+
+/**
+ * @brief 处理WIFI测试串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为wifi.
+ * @param [in] argv - 参数列表.
+ */
+static void snfWifiCliCommand(int argc, char **argv)
+{
+    SnfWifiStaConfig sta_config = {0};
+    SnfWifiApConfig ap_config = {0};
+    uint16_t i;
+    int rssi = 0;
+    int ret = -1;
+    uint8_t show_help = 0U;
+
+    if (argc < 2)
+    {
+        show_help = 1U;
+    }
+    else if ((strcmp(argv[1], "sta") == 0) && (argc == 4))
+    {
+        strncpy(sta_config.ssid, argv[2], SNF_WIFI_SSID_MAX_LEN);
+        strncpy(sta_config.password, argv[3], SNF_WIFI_PASSWORD_MAX_LEN);
+        ret = snfWifiStaConnect(&sta_config);
+    }
+    else if ((strcmp(argv[1], "ap") == 0) && (argc == 4))
+    {
+        strncpy(ap_config.ssid, argv[2], SNF_WIFI_SSID_MAX_LEN);
+        strncpy(ap_config.password, argv[3], SNF_WIFI_PASSWORD_MAX_LEN);
+        ap_config.channel = SNF_WIFI_CLI_AP_CHANNEL;
+        ap_config.max_connections = SNF_WIFI_CLI_AP_MAX_CONNECTIONS;
+        ap_config.security = SNF_WIFI_SECURITY_WPA2;
+        ret = snfWifiApStart(&ap_config);
+    }
+    else if ((strcmp(argv[1], "sta_disconnect") == 0) && (argc == 2))
+    {
+        ret = snfWifiStaDisconnect();
+    }
+    else if ((strcmp(argv[1], "ap_stop") == 0) && (argc == 2))
+    {
+        ret = snfWifiApStop();
+    }
+    else if ((strcmp(argv[1], "scan") == 0) && (argc == 2))
+    {
+        SnfWifiLinkInfo scan_once[SNF_WIFI_CLI_SCAN_ONCE_MAX] = {0};
+        uint16_t result_count = 0;
+
+        ret = snfWifiScan();
+        vTaskDelay(SNF_WIFI_CLI_SCAN_WAIT_MS / portTICK_PERIOD_MS);
+        snfWifiScanGetResults(scan_once, SNF_WIFI_CLI_SCAN_ONCE_MAX, &result_count);
+        for (i = 0; i < result_count; i++)
+        {
+            LOG_I(tag,
+                  "scan result: %s, rssi=%d dBm, channel=%d, security=%d",
+                  scan_once[i].ssid,
+                  scan_once[i].rssi,
+                  scan_once[i].channel,
+                  scan_once[i].security);
+        }
+    }
+    else if ((strcmp(argv[1], "scan_results") == 0) && (argc == 2))
+    {
+        SnfWifiLinkInfo scan_results[SNF_WIFI_CLI_SCAN_RESULT_MAX] = {0};
+        uint16_t result_count = 0;
+
+        ret = snfWifiScanGetResults(scan_results,
+                                    SNF_WIFI_CLI_SCAN_RESULT_MAX,
+                                    &result_count);
+        if (ret == 0)
+        {
+            LOG_I(tag, "scan result count: %d\r\n", result_count);
+            for (i = 0; i < result_count; i++)
+            {
+                LOG_I(tag, "[%d] ssid=%s, rssi=%d, channel=%d\r\n",
+                      i,
+                      scan_results[i].ssid,
+                      scan_results[i].rssi,
+                      scan_results[i].channel);
+            }
+        }
+    }
+    else if ((strcmp(argv[1], "status") == 0) && (argc == 2))
+    {
+        printf("link=%d, scan=%d\r\n",
+               snfWifiGetLinkStatus(),
+               snfWifiScanStatus());
+        ret = 0;
+    }
+    else if ((strcmp(argv[1], "rssi") == 0) && (argc == 2))
+    {
+        ret = snfWifiStaGetRssi(&rssi);
+        if (ret == 0)
+        {
+            printf("rssi=%d dBm\r\n", rssi);
+        }
+    }
+    else
+    {
+        show_help = 1U;
+    }
+
+    if (show_help != 0U)
+    {
+        snfWifiCliPrintHelp();
+    }
+    else
+    {
+        printf("sonoff wifi ret=%d\r\n", ret);
+    }
+}
+
+/**
+ * @brief 打印网络测试命令帮助.
+ */
+static void snfNetCliPrintHelp(void)
+{
+    printf("sonoff net wifi_tcp\r\n");
+    printf("sonoff net wifi_udp\r\n");
+    printf("sonoff net thread\r\n");
+}
+
+/**
+ * @brief 处理网络测试串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为net.
+ * @param [in] argv - 参数列表.
+ */
+static void snfNetCliCommand(int argc, char **argv)
+{
+    int ret = -1;
+    uint8_t show_help = 0U;
+
+    if (argc < 2)
+    {
+        show_help = 1U;
+    }
+    else if ((strcmp(argv[1], "wifi_tcp") == 0) && (argc == 2))
+    {
+        ret = snfNetTestWifiTcpInit();
+    }
+    else if ((strcmp(argv[1], "wifi_udp") == 0) && (argc == 2))
+    {
+        ret = snfNetTestWifiUdpInit();
+    }
+    else if ((strcmp(argv[1], "thread") == 0) && (argc == 2))
+    {
+        ret = snfNetTestThreadInit();
+    }
+    else
+    {
+        show_help = 1U;
+    }
+
+    if (show_help != 0U)
+    {
+        snfNetCliPrintHelp();
+    }
+    else
+    {
+        printf("sonoff net ret=%d\r\n", ret);
+    }
+}
+
+/**
+ * @brief 打印堆内存查询命令帮助.
+ */
+static void memCliPrintHelp(void)
+{
+    printf("sonoff mem\r\n");
+}
+
+/**
+ * @brief 处理堆内存查询串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为mem.
+ * @param [in] argv - 参数列表.
+ */
+static void memCliCommand(int argc, char **argv)
+{
+    uint32_t heap0_size;
+    uint32_t heap1_size;
+    uint32_t total_size;
+
+    if ((argc != 1) || (argv == NULL))
+    {
+        memCliPrintHelp();
+        return;
+    }
+
+    heap0_size = (uint32_t)prvHeapGetTotalSize();
+    heap1_size = (uint32_t)xPortGetPsramTotalHeapSize();
+    total_size = heap0_size + heap1_size;
+
+    printf("\n\rTotalHeapSize:%u(%u+%u)",
+           (unsigned int)total_size,
+           (unsigned int)heap0_size,
+           (unsigned int)heap1_size);
+    printf("\n\rFreeHeapSize: %u", (unsigned int)xPortGetFreeHeapSize());
+    printf("\n\rMinimumEverFreeHeapSize:  %u",
+           (unsigned int)xPortGetMinimumEverFreeHeapSize());
+}
+
+/**
+ * @brief 打印任务列表命令帮助.
+ */
+static void taskCliPrintHelp(void)
+{
+    printf("sonoff task\r\n");
+}
+
+/**
+ * @brief 处理任务列表查询串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为task.
+ * @param [in] argv - 参数列表.
+ */
+static void taskCliCommand(int argc, char **argv)
+{
+    char *task_list_buf;
+    uint32_t buf_size;
+
+    if ((argc != 1) || (argv == NULL))
+    {
+        taskCliPrintHelp();
+        return;
+    }
+
+    buf_size = ((uint32_t)uxTaskGetNumberOfTasks() * SNF_CLI_TASK_LIST_LINE_SIZE) + 1;
+    task_list_buf = (char *)pvPortMalloc(buf_size);
+    if (task_list_buf == NULL)
+    {
+        printf("\n\rmemory malloced failed.");
+        return;
+    }
+
+    printf("\n\rtask info:");
+    printf("\n\rname            | status | prio | stack | id | tcb");
+    vTaskList(task_list_buf);
+    printf("%s", task_list_buf);
+    vPortFree(task_list_buf);
+}
+
+/**
+ * @brief 打印NVDM测试命令帮助.
+ */
+static void snfNvdmCliPrintHelp(void)
+{
+    printf("sonoff nvdm show\r\n");
+    printf("sonoff nvdm read <group> <key>\r\n");
+    printf("sonoff nvdm write <group> <key> <value>\r\n");
+    printf("sonoff nvdm clean\r\n");
+}
+
+/**
+ * @brief 处理NVDM测试串口命令.
+ *
+ * @param [in] argc - 参数数量, argv[0]为nvdm.
+ * @param [in] argv - 参数列表.
+ */
+static void snfNvdmCliCommand(int argc, char **argv)
+{
+    int ret = -1;
+    uint8_t show_help = 0;
+
+    if (argc < 2)
+    {
+        show_help = 1;
+    }
+    else if ((strcmp(argv[1], "show") == 0) && (argc == 2))
+    {
+        ret = snfNvdmShow();
+    }
+    else if ((strcmp(argv[1], "read") == 0) && (argc == 4))
+    {
+        snfNvdmCliReadItem(argv[2], argv[3]);
+        ret = 0;
+    }
+    else if ((strcmp(argv[1], "write") == 0) && (argc == 5))
+    {
+        snfNvdmCliWriteItem(argv[2], argv[3], argv[4]);
+        ret = 0;
+    }
+    else if ((strcmp(argv[1], "clean") == 0) && (argc == 2))
+    {
+        ret = snfNvdmCleanUserGroup();
+    }
+    else
+    {
+        show_help = 1;
+    }
+
+    if (show_help != 0)
+    {
+        snfNvdmCliPrintHelp();
+    }
+    else
+    {
+        printf("sonoff nvdm ret=%d\r\n", ret);
+    }
+}
+
+static const SnfCliEntry snf_cli_command_table[] = {
+    {"wifi", "WIFI test commands", &snfWifiCliCommand, &snfWifiCliPrintHelp},
+    {"net", "network test commands", &snfNetCliCommand, &snfNetCliPrintHelp},
+    {"nvdm", "NVDM test commands", &snfNvdmCliCommand, &snfNvdmCliPrintHelp},
+    {"mem", "show heap memory", &memCliCommand, &memCliPrintHelp},
+    {"task", "show task list", &taskCliCommand, &taskCliPrintHelp},
+};
+
+#define SNF_CLI_COMMAND_COUNT (sizeof(snf_cli_command_table) / sizeof(snf_cli_command_table[0]))
+
+/**
+ * @brief 打印Sonoff工具箱全部命令.
+ */
+static void snfCliPrintHelp(void)
+{
+    uint16_t i;
+
+    printf("Usage: sonoff <command> [args]\r\n");
+    printf("Commands:\r\n");
+    for (i = 0U; i < SNF_CLI_COMMAND_COUNT; i++)
+    {
+        printf("  %-8s %s\r\n",
+               snf_cli_command_table[i].name,
+               snf_cli_command_table[i].help);
+    }
+
+    printf("\r\n");
+    for (i = 0U; i < SNF_CLI_COMMAND_COUNT; i++)
+    {
+        if (snf_cli_command_table[i].print_help != NULL)
+        {
+            snf_cli_command_table[i].print_help();
+        }
+    }
+}
+
+/**
+ * @brief 处理Sonoff工具箱串口命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void snfCliCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    uint16_t i;
+    uint8_t handled = 0U;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if (argc >= 2)
+    {
+        for (i = 0U; i < SNF_CLI_COMMAND_COUNT; i++)
+        {
+            if (strcmp(argv[1], snf_cli_command_table[i].name) == 0)
+            {
+                snf_cli_command_table[i].handler((argc - 1), &argv[1]);
+                handled = 1U;
+                break;
+            }
+        }
+    }
+
+    if (handled == 0U)
+    {
+        snfCliPrintHelp();
+    }
+}
+
+/**
+ * @brief 打印AT命令错误响应.
+ *
+ * @param [in] cmd - AT命令名, 不含问号.
+ */
+static void atPrintError(const char *cmd)
+{
+    printf("%s=ERROR\r\n", cmd);
+}
+
+/**
+ * @brief 打印AT命令成功响应.
+ *
+ * @param [in] cmd - AT命令名, 不含问号.
+ * @param [in] value - 响应值.
+ */
+static void atPrintValue(const char *cmd, const char *value)
+{
+    printf("%s=%s\r\n", cmd, value);
+}
+
+/**
+ * @brief 打印License写入错误响应.
+ *
+ * @param [in] ident - 错误标识.
+ * @param [in] reason - 错误原因.
+ */
+static void atPrintLicenseError(const char *ident, const char *reason)
+{
+    printf("%s=ERROR\r\n", AT_CMD_LICENSE_WRITE);
+    printf("%s:%s\r\n", ident, reason);
+}
+
+/**
+ * @brief 将被CLI按`=`切开的Base64填充符写回.
+ *
+ * @param [in,out] base64 - Base64起始指针, 与sha256同属一块输入缓冲.
+ * @param [in] sha256 - SHA256字段起始指针.
+ */
+static void atRestoreBase64Padding(char *base64, char *sha256)
+{
+    char *p;
+
+    if ((base64 == NULL) || (sha256 == NULL) || (base64 >= sha256))
+    {
+        return;
+    }
+
+    for (p = base64; p < (sha256 - 1); p++)
+    {
+        if (*p == '\0')
+        {
+            *p = '=';
+        }
+    }
+}
+
+/**
+ * @brief 处理AT+MASTER_CHIP_ID?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMasterChipIdCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    uint8_t uid[NVDM_FACTORY_CHIP_ID_LEN];
+    char hex[NVDM_FACTORY_CHIP_ID_LEN * 2 + 1];
+    char value[BUFF_SIZE_128];
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MASTER_CHIP_ID);
+        return;
+    }
+
+    if (snfChipIdGet(uid, sizeof(uid)) != 0)
+    {
+        LOG_E(tag, "get master chip id failed");
+        atPrintError(AT_CMD_MASTER_CHIP_ID);
+        return;
+    }
+
+    for (i = 0; i < NVDM_FACTORY_CHIP_ID_LEN; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02X", (unsigned int)uid[i]);
+    }
+
+    snprintf(value, sizeof(value), "%s-%s", AT_MASTER_CHIP_NAME, hex);
+    atPrintValue(AT_CMD_MASTER_CHIP_ID, value);
+}
+
+/**
+ * @brief 处理AT+FW_VER?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atFwVerCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char value[BUFF_SIZE_128];
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_FW_VER);
+        return;
+    }
+
+    ret = snprintf(value,
+                   sizeof(value),
+                   "FW%s-%s-%s-%s-v%s",
+                   SONOFF_DEVICE_CLASS,
+                   SONOFF_DEVICE_SERIAL_NUMBER,
+                   SONOFF_DEVICE_FUNCTION,
+                   SONOFF_DEVICE_CHIP,
+                   SONOFF_SOFTWARE_VERSION_STRING);
+    if ((ret < 0) || (ret >= (int)sizeof(value)))
+    {
+        atPrintError(AT_CMD_FW_VER);
+        return;
+    }
+
+    atPrintValue(AT_CMD_FW_VER, value);
+}
+
+/**
+ * @brief 处理AT+MT_SERIAL_NUM?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSerialNumQueryCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char serial_number[NVDM_FACTORY_SERIAL_NUMBER_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM);
+        return;
+    }
+
+    if (snfSerialNumberGet(serial_number, sizeof(serial_number)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SERIAL_NUM, serial_number);
+}
+
+/**
+ * @brief 处理AT+MT_SERIAL_NUM_SET设置命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSerialNumSetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 2) || (argv == NULL) || (argv[1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM_SET);
+        return;
+    }
+
+    if (snfSerialNumberSet(argv[1]) != 0)
+    {
+        atPrintError(AT_CMD_MT_SERIAL_NUM_SET);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SERIAL_NUM_SET, "OK");
+}
+
+/**
+ * @brief 处理AT+ACTIVE_CODE写入命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atActiveCodeCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 2) || (argv == NULL) || (argv[1] == NULL))
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    if (snfActiveCodeSet(argv[1]) != 0)
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_ACTIVE_CODE, "OK");
+}
+
+/**
+ * @brief 处理AT+ACTIVE_CODE?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atActiveCodeQueryCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    if (snfActiveCodeIsAuthorized() != 0)
+    {
+        atPrintError(AT_CMD_ACTIVE_CODE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_ACTIVE_CODE, "OK");
+}
+
+/**
+ * @brief 处理AT+LICENSE_WRITE写入命令.
+ *
+ * 平台CLI会把JSON里的逗号和键名引号切开, 这里按切开前的缓冲把分隔符还原.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char reply_sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char *json;
+    char *end;
+    unsigned long frame_len;
+    uint16_t i;
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 3) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL))
+    {
+        atPrintLicenseError("FAILED OPERATE", "NON LICENSE FRAME");
+        return;
+    }
+
+    frame_len = strtoul(argv[1], &end, 10);
+    if ((end == argv[1]) || (*end != '\0') || (frame_len == 0)
+        || (frame_len > AT_LICENSE_JSON_MAX_LEN))
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    for (i = 2; i < (uint16_t)(argc - 1); i++)
+    {
+        if (*(argv[i + 1] - 1) == '"')
+        {
+            argv[i][strlen(argv[i])] = ',';
+        }
+        else
+        {
+            argv[i][strlen(argv[i])] = '"';
+        }
+    }
+
+    json = argv[2];
+    if (strlen(json) != frame_len)
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    if (snfLicenseIsValid() == 0)
+    {
+        atPrintLicenseError("FAILED OPERATE", "LICENSE ALREADY");
+        return;
+    }
+
+    if (snfLicenseClear() != 0)
+    {
+        atPrintLicenseError("HARDWARE FAILED", "STORAGE HARDWARE");
+        return;
+    }
+
+    ret = snfLicenseWrite(json, reply_sha256, sizeof(reply_sha256));
+    if (ret == SNF_LICENSE_ERR_FRAME_LEN)
+    {
+        atPrintLicenseError("FAILED PARAM", "FRAMER LEN MISMATCHING");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_SHA256)
+    {
+        atPrintLicenseError("FAILED PARAM", "FRAMER SHA256 CHECK MISMATCHING");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_RULES)
+    {
+        atPrintLicenseError("FAILED PARAM", "NON COMPLIANCE WITH LICENSE RULES");
+        return;
+    }
+
+    if (ret == SNF_LICENSE_ERR_MODEL)
+    {
+        atPrintLicenseError("FAILED PARAM", "DEVICE MODEL MISMATCHING");
+        return;
+    }
+
+    if (ret != SNF_LICENSE_OK)
+    {
+        atPrintLicenseError("HARDWARE FAILED", "STORAGE HARDWARE");
+        return;
+    }
+
+    printf("%s=OK\r\n", AT_CMD_LICENSE_WRITE);
+    for (i = 0; i < 3; i++)
+    {
+        printf("SHA256=%s\r\n", reply_sha256);
+    }
+}
+
+/**
+ * @brief 处理AT+LICENSE_READ?查询命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char uiid[NVDM_FACTORY_UIID_STR_MAX_LEN + 1];
+    char device_model[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_LICENSE_READ);
+        return;
+    }
+
+    if (snfLicenseRead(uiid, sizeof(uiid), device_model, sizeof(device_model),
+                       sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_LICENSE_READ);
+        return;
+    }
+
+    printf("%s=%s,%s,%s\r\n", AT_CMD_LICENSE_READ, uiid, device_model, sha256);
+}
+
+/**
+ * @brief 处理AT+LICENSE_DELETE删除命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atLicenseDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_LICENSE_DELETE);
+        return;
+    }
+
+    if (snfLicenseClear() != 0)
+    {
+        atPrintError(AT_CMD_LICENSE_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_LICENSE_DELETE, "OK");
+}
+
+/**
+ * @brief 将十六进制字符转换为半字节.
+ *
+ * @param [in] ch - 十六进制字符.
+ * @param [out] nibble - 半字节值.
+ * @return 1表示转换成功, 0表示字符非法.
+ */
+static int atHexNibble(char ch, uint8_t *nibble)
+{
+    if (nibble == NULL)
+    {
+        return 0;
+    }
+
+    if ((ch >= '0') && (ch <= '9'))
+    {
+        *nibble = (uint8_t)(ch - '0');
+        return 1;
+    }
+
+    if ((ch >= 'A') && (ch <= 'F'))
+    {
+        *nibble = (uint8_t)((ch - 'A') + 10);
+        return 1;
+    }
+
+    if ((ch >= 'a') && (ch <= 'f'))
+    {
+        *nibble = (uint8_t)((ch - 'a') + 10);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 解码64位十六进制SHA256摘要.
+ *
+ * @param [in] hex - 64位十六进制字符串.
+ * @param [out] digest - 32字节摘要缓冲区.
+ * @return 1表示解码成功, 0表示非法.
+ */
+static int atSha256HexDecode(const char *hex, uint8_t *digest)
+{
+    uint16_t i;
+    uint8_t high;
+    uint8_t low;
+
+    if ((hex == NULL) || (digest == NULL))
+    {
+        return 0;
+    }
+
+    if (strlen(hex) != AT_MT_FACTORY_DATA_SHA256_HEX_LEN)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
+    {
+        if (atHexNibble(hex[i * 2], &high) == 0)
+        {
+            return 0;
+        }
+
+        if (atHexNibble(hex[(i * 2) + 1], &low) == 0)
+        {
+            return 0;
+        }
+
+        digest[i] = (uint8_t)((high << 4) | low);
+    }
+
+    return 1;
+}
+
+/**
+ * @brief 将SHA256摘要编码为64位十六进制字符串.
+ *
+ * @param [in] digest - 32字节摘要.
+ * @param [out] hex - 十六进制输出缓冲区.
+ * @param [in] hex_size - 缓冲区长度, 需大于AT_MT_FACTORY_DATA_SHA256_HEX_LEN.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int atSha256HexEncode(const uint8_t *digest, char *hex, uint16_t hex_size)
+{
+    uint16_t i;
+
+    if ((digest == NULL) || (hex == NULL) || (hex_size <= AT_MT_FACTORY_DATA_SHA256_HEX_LEN))
+    {
+        return -1;
+    }
+
+    for (i = 0; i < SNF_SHA256_DIGEST_SIZE; i++)
+    {
+        snprintf(&hex[i * 2], 3, "%02X", (unsigned int)digest[i]);
+    }
+
+    hex[AT_MT_FACTORY_DATA_SHA256_HEX_LEN] = '\0';
+
+    return 0;
+}
+
+/**
+ * @brief 计算数据的SHA256十六进制摘要.
+ *
+ * @param [in] data - 待计算字符串.
+ * @param [out] hex - 64位十六进制摘要.
+ * @param [in] hex_size - 摘要缓冲区长度.
+ * @return 0表示成功, 负数表示失败.
+ */
+static int atSha256DigestHex(const char *data, char *hex, uint16_t hex_size)
+{
+    SnfSha256Ctx ctx;
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    int ret;
+
+    if (data == NULL)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Update(&ctx, (const uint8_t *)data, (uint32_t)strlen(data));
+    if (ret != SNF_SHA256_OK)
+    {
+        snfSha256Free(&ctx);
+        return -1;
+    }
+
+    ret = snfSha256Finish(&ctx, digest, sizeof(digest));
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    return atSha256HexEncode(digest, hex, hex_size);
+}
+
+/**
+ * @brief 从NVDM拼装READ用的factory_data, 含末尾逗号.
+ *
+ * @param [out] factory_data - 拼装缓冲区.
+ * @param [in] factory_data_size - 缓冲区长度.
+ * @return 0表示成功, 负数表示读取失败或缓冲区不足.
+ */
+static int atFactoryDataReadBuild(char *factory_data, uint16_t factory_data_size)
+{
+    uint16_t discriminator;
+    uint32_t iteration_count;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    char salt[NVDM_MATTER_SALT_STR_MAX_LEN + 1];
+    char verifier[NVDM_MATTER_VERIFIER_STR_MAX_LEN + 1];
+    char vendor_name[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char product_name[NVDM_MATTER_NAME_MAX_LEN + 1];
+    char rd_id_uid[NVDM_MATTER_RD_ID_UID_HEX_LEN + 1];
+    int ret;
+
+    if ((factory_data == NULL) || (factory_data_size == 0))
+    {
+        return -1;
+    }
+
+    if (snfMatterDiscriminatorGet(&discriminator) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterIterationCountGet(&iteration_count) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterSaltGet(salt, sizeof(salt)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVerifierGet(verifier, sizeof(verifier)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVendorIdGet(&vendor_id) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterVendorNameGet(vendor_name, sizeof(vendor_name)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterProductIdGet(&product_id) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterProductNameGet(product_name, sizeof(product_name)) != 0)
+    {
+        return -1;
+    }
+
+    if (snfMatterRdIdUidGet(rd_id_uid, sizeof(rd_id_uid)) != 0)
+    {
+        return -1;
+    }
+
+    ret = snprintf(factory_data,
+                   factory_data_size,
+                   "%u,%u,%s,%s,%04X,%s,%04X,%s,%s,",
+                   (unsigned int)discriminator,
+                   (unsigned int)iteration_count,
+                   salt,
+                   verifier,
+                   (unsigned int)vendor_id,
+                   vendor_name,
+                   (unsigned int)product_id,
+                   product_name,
+                   rd_id_uid);
+    if ((ret < 0) || (ret >= (int)factory_data_size))
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 校验factory_data含末尾逗号的SHA256摘要.
+ *
+ * @param [in] fields - 10个工厂数据字段.
+ * @param [in] sha256_hex - 64位十六进制摘要.
+ * @return 0表示匹配, 负数表示计算失败或不匹配.
+ */
+static int atFactoryDataSha256Verify(const char * const *fields, const char *sha256_hex)
+{
+    SnfSha256Ctx ctx;
+    uint8_t digest[SNF_SHA256_DIGEST_SIZE];
+    uint8_t expected[SNF_SHA256_DIGEST_SIZE];
+    uint16_t i;
+    int ret;
+
+    if ((fields == NULL) || (sha256_hex == NULL))
+    {
+        return -1;
+    }
+
+    if (atSha256HexDecode(sha256_hex, expected) == 0)
+    {
+        return -1;
+    }
+
+    ret = snfSha256Init(&ctx);
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        if (fields[i] == NULL)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+
+        ret = snfSha256Update(&ctx, (const uint8_t *)fields[i], (uint32_t)strlen(fields[i]));
+        if (ret != SNF_SHA256_OK)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+
+        ret = snfSha256Update(&ctx, (const uint8_t *)",", 1);
+        if (ret != SNF_SHA256_OK)
+        {
+            snfSha256Free(&ctx);
+            return -1;
+        }
+    }
+
+    ret = snfSha256Finish(&ctx, digest, sizeof(digest));
+    if (ret != SNF_SHA256_OK)
+    {
+        return -1;
+    }
+
+    if (memcmp(digest, expected, SNF_SHA256_DIGEST_SIZE) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 处理AT+MT_FACTORY_DATA_WRITE写入命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtFactoryDataWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    static const AtMatterItemSet item_set[AT_MT_FACTORY_DATA_FIELD_NUM] = {
+        snfMatterDiscriminatorSet,
+        snfMatterIterationCountSet,
+        snfMatterSaltSet,
+        snfMatterVerifierSet,
+        snfMatterVendorIdSet,
+        snfMatterVendorNameSet,
+        snfMatterProductIdSet,
+        snfMatterProductNameSet,
+        snfMatterRdIdUidSet,
+        snfMatterPasscodeSet,
+    };
+    const char *fields[AT_MT_FACTORY_DATA_FIELD_NUM];
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != AT_MT_FACTORY_DATA_WRITE_ARGC) || (argv == NULL))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+        return;
+    }
+
+    for (i = 1; i < AT_MT_FACTORY_DATA_WRITE_ARGC; i++)
+    {
+        if (argv[i] == NULL)
+        {
+            atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+            return;
+        }
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        fields[i] = argv[i + 1];
+    }
+
+    if (atFactoryDataSha256Verify(fields, argv[11]) != 0)
+    {
+        LOG_E(tag, "matter factory data sha256 mismatch");
+        atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+        return;
+    }
+
+    for (i = 0; i < AT_MT_FACTORY_DATA_FIELD_NUM; i++)
+    {
+        if (item_set[i](fields[i]) != 0)
+        {
+            atPrintError(AT_CMD_MT_FACTORY_DATA_WRITE);
+            return;
+        }
+    }
+
+    atPrintValue(AT_CMD_MT_FACTORY_DATA_WRITE, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_FACTORY_DATA_READ读取命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtFactoryDataReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char factory_data[BUFF_SIZE_512];
+    char sha256_hex[AT_MT_FACTORY_DATA_SHA256_HEX_LEN + 1];
+    char value[BUFF_SIZE_512];
+    int ret;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    if (atFactoryDataReadBuild(factory_data, sizeof(factory_data)) != 0)
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    if (atSha256DigestHex(factory_data, sha256_hex, sizeof(sha256_hex)) != 0)
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    ret = snprintf(value, sizeof(value), "%s%s", factory_data, sha256_hex);
+    if ((ret < 0) || (ret >= (int)sizeof(value)))
+    {
+        atPrintError(AT_CMD_MT_FACTORY_DATA_READ);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_FACTORY_DATA_READ, value);
+}
+
+/**
+ * @brief 处理AT+MT_CD_WRITE写入命令.
+ *
+ * 平台CLI会把Base64里的填充'='切开, 这里按切开前的缓冲把分隔符还原.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char *base64;
+    char *sha256;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 4) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[argc - 1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_WRITE);
+        return;
+    }
+
+    sha256 = argv[argc - 1];
+    base64 = argv[2];
+    atRestoreBase64Padding(base64, sha256);
+
+    if (snfMatterCdWrite(argv[1], base64, sha256) != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_WRITE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_CD_WRITE, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_CD_READ读取命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char base64[NVDM_MATTER_CD_B64_MAX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    uint16_t data_len;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_READ);
+        return;
+    }
+
+    if (snfMatterCdRead(&data_len, base64, sizeof(base64), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_READ);
+        return;
+    }
+
+    printf("%s=%u\r\n", AT_CMD_MT_CD_READ, (unsigned int)data_len);
+    printf("%s\r\n", base64);
+    printf("SHA256=%s\r\n", sha256);
+}
+
+/**
+ * @brief 处理AT+MT_CD_DELETE删除命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtCdDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_CD_DELETE);
+        return;
+    }
+
+    if (snfMatterCdClear() != 0)
+    {
+        atPrintError(AT_CMD_MT_CD_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_CD_DELETE, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_PUB_KEY_GET命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtPubKeyGetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char pub_hex[NVDM_MATTER_ECDH_PUB_HEX_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_GET);
+        return;
+    }
+
+    if (snfMatterPubKeyGet(pub_hex, sizeof(pub_hex), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_GET);
+        return;
+    }
+
+    printf("%s=%s,%s\r\n", AT_CMD_MT_PUB_KEY_GET, pub_hex, sha256);
+}
+
+/**
+ * @brief 处理AT+MT_PUB_KEY_SET命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtPubKeySetCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 5) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[3] == NULL) || (argv[4] == NULL))
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_SET);
+        return;
+    }
+
+    if (snfMatterPubKeySet(argv[1], argv[2], argv[3], argv[4]) != 0)
+    {
+        atPrintError(AT_CMD_MT_PUB_KEY_SET);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_PUB_KEY_SET, "OK");
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_WRITE命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertWriteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char reply_sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+    char *base64;
+    char *sha256;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc < 4) || (argv == NULL) || (argv[1] == NULL) || (argv[2] == NULL)
+        || (argv[argc - 1] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_WRITE);
+        return;
+    }
+
+    sha256 = argv[argc - 1];
+    base64 = argv[2];
+    atRestoreBase64Padding(base64, sha256);
+
+    if (snfMatterSecureCertWrite(argv[1], base64, sha256, reply_sha256, sizeof(reply_sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_WRITE);
+        return;
+    }
+
+    printf("%s=OK\r\n", AT_CMD_MT_SECURE_CERT_WRITE);
+    printf("SHA256=%s\r\n", reply_sha256);
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_READ命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertReadCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    char serial_number[NVDM_FACTORY_SERIAL_NUMBER_LEN + 1];
+    char sha256[NVDM_FACTORY_SHA256_HEX_LEN + 1];
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_READ);
+        return;
+    }
+
+    if (snfMatterSecureCertRead(serial_number, sizeof(serial_number), sha256, sizeof(sha256)) != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_READ);
+        return;
+    }
+
+    printf("%s=%s,%s\r\n", AT_CMD_MT_SECURE_CERT_READ, serial_number, sha256);
+}
+
+/**
+ * @brief 处理AT+MT_SECURE_CERT_DELETE命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atMtSecureCertDeleteCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_DELETE);
+        return;
+    }
+
+    if (snfMatterSecureCertClear() != 0)
+    {
+        atPrintError(AT_CMD_MT_SECURE_CERT_DELETE);
+        return;
+    }
+
+    atPrintValue(AT_CMD_MT_SECURE_CERT_DELETE, "OK");
+}
+
+/**
+ * @brief AT指令表. 每条使用完整命令名, 因为平台CLI按argv[0]精确匹配.
+ */
+static const struct cli_command snfAtCliCommands[] = {
+    {AT_CMD_MASTER_CHIP_ID_QUERY, "query master chip unique id", atMasterChipIdCommand},
+    {AT_CMD_FW_VER_QUERY, "query firmware version", atFwVerCommand},
+    {AT_CMD_MT_SERIAL_NUM_QUERY, "query product serial number", atMtSerialNumQueryCommand},
+    {AT_CMD_MT_SERIAL_NUM_SET, "set product serial number", atMtSerialNumSetCommand},
+    {AT_CMD_MT_FACTORY_DATA_WRITE, "write matter factory data", atMtFactoryDataWriteCommand},
+    {AT_CMD_MT_FACTORY_DATA_READ, "read matter factory data", atMtFactoryDataReadCommand},
+    {AT_CMD_MT_CD_WRITE, "write matter certification declaration", atMtCdWriteCommand},
+    {AT_CMD_MT_CD_READ, "read matter certification declaration", atMtCdReadCommand},
+    {AT_CMD_MT_CD_DELETE, "delete matter certification declaration", atMtCdDeleteCommand},
+    {AT_CMD_MT_PUB_KEY_GET, "get matter ecdh public key", atMtPubKeyGetCommand},
+    {AT_CMD_MT_PUB_KEY_SET, "set peer ecdh public key", atMtPubKeySetCommand},
+    {AT_CMD_MT_SECURE_CERT_WRITE, "write matter secure cert", atMtSecureCertWriteCommand},
+    {AT_CMD_MT_SECURE_CERT_READ, "read matter secure cert status", atMtSecureCertReadCommand},
+    {AT_CMD_MT_SECURE_CERT_DELETE, "delete matter secure cert", atMtSecureCertDeleteCommand},
+    {AT_CMD_ACTIVE_CODE, "write device active code", atActiveCodeCommand},
+    {AT_CMD_ACTIVE_CODE_QUERY, "query device active code status", atActiveCodeQueryCommand},
+    {AT_CMD_LICENSE_WRITE, "write factory license json", atLicenseWriteCommand},
+    {AT_CMD_LICENSE_READ_QUERY, "query factory license status", atLicenseReadCommand},
+    {AT_CMD_LICENSE_DELETE, "delete factory license data", atLicenseDeleteCommand},
+};
+
+#define SNF_AT_COMMAND_COUNT (sizeof(snfAtCliCommands) / sizeof(snfAtCliCommands[0]))
+
+/**
+ * @brief 处理AT帮助命令.
+ *
+ * @param [in] pcWriteBuffer - CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - CLI输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void atHelpCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    uint16_t i;
+
+    (void)pcWriteBuffer;
+    (void)xWriteBufferLen;
+    (void)argc;
+    (void)argv;
+
+    for (i = 0; i < SNF_AT_COMMAND_COUNT; i++)
+    {
+        printf("%s\r\n", snfAtCliCommands[i].name);
+    }
+}
+
+/**
+ * @brief 在启动等待窗口内通知产测进入请求.
+ *
+ * @param [out] pcWriteBuffer - SDK CLI输出缓冲区.
+ * @param [in] xWriteBufferLen - 输出缓冲区长度.
+ * @param [in] argc - 参数数量.
+ * @param [in] argv - 参数列表.
+ */
+static void factoryReplyCommand(char *pcWriteBuffer, int xWriteBufferLen, int argc, char **argv)
+{
+    SnfFactoryReplyState *state = &factory_reply_state;
+
+    if ((argc != 1) || (argv == NULL) || (argv[0] == NULL))
+    {
+        return;
+    }
+
+    if (strcmp(argv[0], "factory!") != 0)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    if (state->reply_sem != NULL)
+    {
+        if ((TickType_t)(xTaskGetTickCount() - state->start_ticks) < state->timeout_ticks)
+        {
+            xSemaphoreGive(state->reply_sem);
+        }
+    }
+    taskEXIT_CRITICAL();
+}
+
+/** @brief Sonoff工具箱串口命令表. */
+static const struct cli_command snfCliCommands[] = {
+    {"sonoff", "sonoff <command> [args]", snfCliCommand},
+    {"AT", "AT command", atHelpCommand},
+    {"factory!", "enter factory mode during boot", factoryReplyCommand},
+};
+
+int snfCliWaitFactoryReply(uint32_t timeout_ms)
+{
+    SnfFactoryReplyState *state = &factory_reply_state;
+    SemaphoreHandle_t reply_sem = xSemaphoreCreateBinary();
+    BaseType_t result;
+
+    if (reply_sem == NULL)
+    {
+        LOG_E(tag, "factory reply semaphore init failed");
+        return -1;
+    }
+
+    taskENTER_CRITICAL();
+    state->start_ticks = xTaskGetTickCount();
+    state->timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    state->reply_sem = reply_sem;
+    taskEXIT_CRITICAL();
+
+    result = xSemaphoreTake(reply_sem, pdMS_TO_TICKS(timeout_ms));
+
+    taskENTER_CRITICAL();
+    state->reply_sem = NULL;
+    taskEXIT_CRITICAL();
+    vSemaphoreDelete(reply_sem);
+
+    return (result == pdTRUE) ? 0 : -1;
+}
+
+int snfCliInit(void)
+{
+    int ret;
+
+    ret = cli_register_commands(snfCliCommands,
+                                sizeof(snfCliCommands) / sizeof(snfCliCommands[0]));
+    if (ret != 0)
+    {
+        return ret;
+    }
+
+    ret = cli_register_commands(snfAtCliCommands, (int)SNF_AT_COMMAND_COUNT);
+
+    return ret;
+}

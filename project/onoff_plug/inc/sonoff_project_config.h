@@ -1,0 +1,26 @@
+#ifndef __SONOFF_PROJECT_CONFIG_H__
+#define __SONOFF_PROJECT_CONFIG_H__
+
+#define SONOFF_DEVICE_MODEL                     "onoff_plug"
+
+/* 设备固件命名信息 */
+#define SONOFF_DEVICE_CLASS                     "SW"
+#define SONOFF_DEVICE_SERIAL_NUMBER             "01"
+#define SONOFF_DEVICE_FUNCTION                  "SWITCH"
+#define SONOFF_DEVICE_CHIP                      "BK7239N"
+
+#define SONOFF_SOFTWARE_VERSION_STRING          "1.1.2"
+
+/** @brief Matter OTA 包标识，需与目标设备的产测配置一致. */
+#define SONOFF_MATTER_VENDOR_ID                 0x1286
+#define SONOFF_MATTER_PRODUCT_ID                0x03DE
+
+#define SONOFF_MATTER_SOFTWARE_VERSION          2
+#define SONOFF_MATTER_SOFTWARE_VERSION_STRING   "1.1.2"
+#define SONOFF_MATTER_HARDWARE_VERSION          1
+#define SONOFF_MATTER_HARDWARE_VERSION_STRING   "1.1.1"
+
+/* 项目配置宏 */
+#define SONOFF_DISABLE_LOG_RX                    1  /* 禁用调试串口接收 */
+
+#endif /* __SONOFF_PROJECT_CONFIG_H__ */
