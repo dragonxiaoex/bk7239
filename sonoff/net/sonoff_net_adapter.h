@@ -22,7 +22,25 @@ typedef enum {
     SNF_NET_ADAPTER_IF_AP,
 } SnfNetAdapterIf;
 
+/** @brief 静态IPv4配置, 各字段为点分十进制字符串. */
+typedef struct
+{
+    char ip[16];
+    char mask[16];
+    char gateway[16];
+    char dns[16];
+} SnfNetAdapterIpv4Config;
+
 typedef void (*SnfNetAdapterEventCB)(SnfNetAdapterEvt event, const void *event_data);
+
+/**
+ * @brief 设置指定接口的静态IPv4参数, 不启停无线接口.
+ *
+ * @param [in] interface - 网络接口.
+ * @param [in] config - 静态IPv4配置, 在接口启动前调用.
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfNetAdapterSetIpv4Config(SnfNetAdapterIf interface, const SnfNetAdapterIpv4Config *config);
 
 /**
  * @brief 初始化网络适配器.

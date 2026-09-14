@@ -26,6 +26,53 @@
  */
 typedef void (*SnfWifiEventCB)(int event, const void *event_data, void *user_data);
 
+/** @brief WIFI管理事件, NET直接转发这些事件及其数据. */
+typedef enum
+{
+    SNF_WIFI_EVT_STA_CONNECTING = 0,
+    SNF_WIFI_EVT_STA_CONNECTED,
+    SNF_WIFI_EVT_STA_CONNECT_FAILED,
+    SNF_WIFI_EVT_STA_DISCONNECTED,
+    SNF_WIFI_EVT_AP_STARTED,
+    SNF_WIFI_EVT_AP_START_FAILED,
+    SNF_WIFI_EVT_AP_STOPPED,
+    SNF_WIFI_EVT_SCAN_DONE,
+    SNF_WIFI_EVT_SCAN_FAILED,
+    SNF_WIFI_EVT_AP_STARTING,
+    SNF_WIFI_EVT_STA_DISCONNECTING,
+    SNF_WIFI_EVT_STA_DISCONNECT_FAILED,
+    SNF_WIFI_EVT_STA_STOPPED,
+    SNF_WIFI_EVT_STA_STOP_FAILED,
+    SNF_WIFI_EVT_AP_STOP_FAILED,
+    SNF_WIFI_EVT_MODE_CHANGED,
+} SnfWifiExternalEventId;
+
+/** @brief 接口启用组合, 与STA是否已连接无关. */
+typedef enum
+{
+    SNF_WIFI_MANAGE_MODE_IDLE = 0,
+    SNF_WIFI_MANAGE_MODE_STA,
+    SNF_WIFI_MANAGE_MODE_AP,
+    SNF_WIFI_MANAGE_MODE_AP_STA,
+} SnfWifiManageMode;
+
+/** @brief STA链路状态, 由WIFI管理层维护. */
+typedef enum
+{
+    SNF_WIFI_LINK_IDLE,
+    SNF_WIFI_LINK_CONNECTING,
+    SNF_WIFI_LINK_CONNECTED,
+    SNF_WIFI_LINK_DISCONNECTING,
+    SNF_WIFI_LINK_DISCONNECTED,
+} SnfWifiLinkStatus;
+
+/** @brief 实际接口组合变化, 请求失败时也可能发生部分变化. */
+typedef struct
+{
+    SnfWifiManageMode previous;
+    SnfWifiManageMode current;
+} SnfWifiModeChangedEvent;
+
 typedef enum {
     SNF_WIFI_MODE_NONE = 0,
     SNF_WIFI_MODE_STA,

@@ -51,26 +51,49 @@ int snfWifiAdapterInit(void);
 /**
  * @brief 反初始化WIFI适配模块.
  *
+ * 当前SDK不支持完整反初始化, 返回NOT_SUPPORTED且保留资源.
+ *
  * @return WIFI适配模块状态码.
  */
 int snfWifiAdapterDeinit(void);
 
 /**
- * @brief 设置WIFI工作模式.
+ * @brief 启动STA接口, 不发起连接, 不操作AP.
  *
- * AP须先调用snfWifiAdapterApSetConfig；STA仅启动接口, 不会自动连接.
- *
- * @param [in] mode - WIFI工作模式.
+ * 配置和启停由WIFI管理任务串行调用, 适配器不决定工作模式.
  * @return WIFI适配模块状态码.
  */
-int snfWifiAdapterSetMode(SnfWifiMode mode);
+int snfWifiAdapterStaStart(void);
 
 /**
- * @brief 获取当前WIFI工作模式.
- *
- * @return 当前WIFI工作模式, 未初始化时返回SNF_WIFI_MODE_NONE.
+ * @brief 停止STA接口, 不操作AP.
+ * @return WIFI适配模块状态码.
  */
-int snfWifiAdapterGetMode(void);
+int snfWifiAdapterStaStop(void);
+
+/**
+ * @brief 启动已配置的AP接口, 不操作STA.
+ * @return WIFI适配模块状态码.
+ */
+int snfWifiAdapterApStart(void);
+
+/**
+ * @brief 停止AP接口, 不操作STA.
+ * @return WIFI适配模块状态码.
+ */
+int snfWifiAdapterApStop(void);
+
+/**
+ * @brief 查询SDK的STA接口启动标志.
+ * @return 1表示已启动, 0表示未启动或未初始化.
+ */
+int snfWifiAdapterStaIsStarted(void);
+
+/**
+ * @brief 查询SDK的AP接口启动标志.
+ * @return 1表示已启动, 0表示未启动或未初始化.
+ */
+int snfWifiAdapterApIsStarted(void);
 
 /**
  * @brief 配置STA连接参数.
@@ -104,6 +127,8 @@ int snfWifiAdapterStaDisconnect(void);
 
 /**
  * @brief 获取当前STA连接信息.
+ *
+ * STA未连接时返回SNF_WIFI_ADAPTER_ERR_NOT_INIT.
  *
  * @param [out] info - STA连接信息.
  * @return WIFI适配模块状态码.

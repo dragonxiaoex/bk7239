@@ -116,6 +116,28 @@ static netif_if_t snfNetAdapterGetSdkInterface(SnfNetAdapterIf interface)
     return NETIF_IF_INVALID;
 }
 
+int snfNetAdapterSetIpv4Config(SnfNetAdapterIf interface, const SnfNetAdapterIpv4Config *config)
+{
+    netif_ip4_config_t sdk_config = {0};
+    netif_if_t sdk_interface = snfNetAdapterGetSdkInterface(interface);
+
+    if ((config == NULL) || (sdk_interface == NETIF_IF_INVALID)
+        || (strnlen(config->ip, sizeof(config->ip)) == sizeof(config->ip))
+        || (strnlen(config->mask, sizeof(config->mask)) == sizeof(config->mask))
+        || (strnlen(config->gateway, sizeof(config->gateway)) == sizeof(config->gateway))
+        || (strnlen(config->dns, sizeof(config->dns)) == sizeof(config->dns)))
+    {
+        return -1;
+    }
+
+    strcpy(sdk_config.ip, config->ip);
+    strcpy(sdk_config.mask, config->mask);
+    strcpy(sdk_config.gateway, config->gateway);
+    strcpy(sdk_config.dns, config->dns);
+
+    return (bk_netif_set_ip4_config(sdk_interface, &sdk_config) == BK_OK) ? 0 : -1;
+}
+
 int snfNetAdapterGetIpv4(SnfNetAdapterIf interface, uint32_t *ip)
 {
     netif_ip4_config_t config = {0};

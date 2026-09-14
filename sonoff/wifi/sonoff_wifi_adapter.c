@@ -13,20 +13,13 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <components/netif_types.h>
-#include <components/netif.h>
 #include <common/bk_err.h>
 #include <components/event.h>
 #include <generated/lmac_wifi_adapter.h>
 #include <modules/wifi.h>
+#include <wifi_v2.h>
 
 #include "sonoff_wifi_adapter.h"
-
-/** @brief AP默认网络地址. */
-#define SNF_DEFAULT_AP_IP_ADDR              "192.168.100.1"     /* IPv4地址 */
-#define SNF_DEFAULT_AP_NETMASK              "255.255.255.0"     /* 子网掩码 */
-#define SNF_DEFAULT_AP_GATEWAY              "192.168.100.1"     /* 网关 */
-#define SNF_DEFAULT_AP_DNS                  "192.168.100.1"     /* DNS */
 
 /* SDK内部接口, 用于判断WIFI是否已初始化. */
 extern bool bk_get_wifi_is_inited(void);
@@ -34,23 +27,16 @@ extern bool bk_get_wifi_is_inited(void);
 /**
  * @brief WIFI适配模块内部状态.
  */
-typedef struct {
-    int init;                               /* 适配器初始化状态 */
-    int sta_started;                        /* STA启动状态 */
-    int ap_started;                         /* AP启动状态 */
-    int scan_started;                       /* 扫描启动状态 */
-    SnfWifiMode mode;                       /* WIFI工作模式 */
-    SnfWifiEventCB event_callback;          /* 适配器事件回调 */
-    void *event_user_data;                  /* 适配器事件回调用户数据 */
+typedef struct
+{
+    int init;                                   /* 适配器初始化状态 */
+    SnfWifiEventCB event_callback;              /* 适配器事件回调 */
+    void *event_user_data;                      /* 适配器事件回调用户数据 */
 } SnfWifiAdapterState;
 
 /* WIFI适配模块运行状态. */
 static SnfWifiAdapterState adapter_state = {
     .init = 0,
-    .sta_started = 0,
-    .ap_started = 0,
-    .scan_started = 0,
-    .mode = SNF_WIFI_MODE_NONE,
     .event_callback = NULL,
     .event_user_data = NULL,
 };
@@ -310,31 +296,18 @@ static void eventCallback(SnfWifiAdapterEvt event, const void *event_data)
 static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
                                    int event_id, void *event_data)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
-
     (void)arg;
     (void)event_module;
 
     switch (event_id)
     {
         case EVENT_WIFI_SCAN_DONE:
-            adp_state->scan_started = 0;
             eventCallback(SNF_WIFI_ADP_EVT_SCAN_DONE, NULL);
             break;
         case EVENT_WIFI_STA_CONNECTED:
-        {
-            SnfWifiLinkInfo link_info = {0};
-
-            if (snfWifiAdapterStaGetLinkInfo(&link_info) == SNF_WIFI_ADAPTER_OK)
-            {
-                eventCallback(SNF_WIFI_ADP_EVT_CONNECTED, &link_info);
-            }
-            else
-            {
-                eventCallback(SNF_WIFI_ADP_EVT_CONNECTED, NULL);
-            }
+            /* 管理任务处理事件时再查询实时链路信息. */
+            eventCallback(SNF_WIFI_ADP_EVT_CONNECTED, NULL);
             break;
-        }
         case EVENT_WIFI_STA_DISCONNECTED:
         {
             SnfWifiStaDisconnectedEvent disconnect_event = {0};
@@ -384,15 +357,14 @@ static bk_err_t snfSdkEventHandler(void *arg, event_module_t event_module,
     return BK_OK;
 }
 
-/**
- * @brief 启动STA接口.
- *
- * @return WIFI适配模块状态码.
- */
-static int snfStartSta(void)
+int snfWifiAdapterStaStart(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
     bk_err_t sdk_error;
+
+    if (snfInitStateGet() != SNF_WIFI_ADAPTER_OK)
+    {
+        return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
+    }
 
     sdk_error = bk_wifi_sta_split_init();
     if (sdk_error != BK_OK)
@@ -406,263 +378,52 @@ static int snfStartSta(void)
         return snfMapSdkError(sdk_error);
     }
 
-    adp_state->sta_started = 1;
+    if (!wifi_sta_is_started())
+    {
+        return SNF_WIFI_ADAPTER_ERR_INTERNAL;
+    }
 
     return SNF_WIFI_ADAPTER_OK;
 }
 
-/**
- * @brief 停止STA接口.
- *
- * @return WIFI适配模块状态码.
- */
-static int snfStopSta(void)
+int snfWifiAdapterStaStop(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    bk_err_t sdk_error;
-
-    if (adp_state->sta_started == 0)
-    {
-        return SNF_WIFI_ADAPTER_OK;
-    }
-
-    (void)bk_wifi_sta_disconnect();
-    sdk_error = bk_wifi_sta_stop();
-    if (sdk_error != BK_OK)
-    {
-        return snfMapSdkError(sdk_error);
-    }
-
-    adp_state->sta_started = 0;
-
-    return SNF_WIFI_ADAPTER_OK;
-}
-
-/**
- * @brief 启动AP接口.
- *
- * @return WIFI适配模块状态码.
- */
-static int snfStartAp(void)
-{
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    bk_err_t sdk_error;
-
-    sdk_error = bk_wifi_ap_start();
-    if(sdk_error != BK_OK)
-    {
-        return snfMapSdkError(sdk_error);
-    }
-
-    adp_state->ap_started = 1;
-
-    return SNF_WIFI_ADAPTER_OK;
-}
-
-/**
- * @brief 停止AP接口.
- *
- * @return WIFI适配模块状态码.
- */
-static int snfStopAp(void)
-{
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    bk_err_t sdk_error;
-
-    if (adp_state->ap_started == 0)
-    {
-        return SNF_WIFI_ADAPTER_OK;
-    }
-
-    sdk_error = bk_wifi_ap_stop();
-    if (sdk_error != BK_OK)
-    {
-        return snfMapSdkError(sdk_error);
-    }
-
-    adp_state->ap_started = 0;
-
-    return snfMapSdkError(sdk_error);
-}
-
-int snfWifiAdapterInit(void)
-{
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    bk_err_t sdk_error;
-    wifi_init_config_t init_config;
-    int adapter_error;
-
-    if (adp_state->init != 0)
-    {
-        return SNF_WIFI_ADAPTER_OK;
-    }
-
-    sdk_error = bk_event_init();
-    if (sdk_error != BK_OK)
-    {
-        return snfMapSdkError(sdk_error);
-    }
-
-    if (!bk_get_wifi_is_inited())
-    {
-        init_config = (wifi_init_config_t)WIFI_DEFAULT_INIT_CONFIG();
-        sdk_error = bk_wifi_init(&init_config);
-        if (sdk_error != BK_OK)
-        {
-            return snfMapSdkError(sdk_error);
-        }
-    }
-
-    sdk_error = bk_event_register_cb(EVENT_MOD_WIFI, EVENT_ID_ALL,
-                                      snfSdkEventHandler, NULL);
-    if ((sdk_error != BK_OK) && (sdk_error != BK_ERR_EVENT_CB_EXIST))
-    {
-        adapter_error = snfMapSdkError(sdk_error);
-        return adapter_error;
-    }
-
-    adp_state->init = 1;
-    adp_state->sta_started = 0;
-    adp_state->ap_started = 0;
-    adp_state->scan_started = 0;
-    adp_state->mode = SNF_WIFI_MODE_NONE;
-
-    return SNF_WIFI_ADAPTER_OK;
-}
-
-int snfWifiAdapterDeinit(void)
-{
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    int adapter_error;
-    int current_error;
-    bk_err_t sdk_error;
-
-    if (adp_state->init == 0)
+    if (snfInitStateGet() != SNF_WIFI_ADAPTER_OK)
     {
         return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
     }
 
-    if (adp_state->scan_started != 0)
-    {
-        bk_wifi_scan_stop();
-        adp_state->scan_started = 0;
-    }
-
-    adapter_error = snfWifiAdapterSetMode(SNF_WIFI_MODE_NONE);
-
-    sdk_error = bk_event_unregister_cb(EVENT_MOD_WIFI, EVENT_ID_ALL,
-                                        snfSdkEventHandler);
-    current_error = snfMapSdkError(sdk_error);
-    if ((current_error != SNF_WIFI_ADAPTER_OK)
-        && (sdk_error != BK_ERR_EVENT_NO_CB))
-    {
-        if (adapter_error == SNF_WIFI_ADAPTER_OK)
-        {
-            adapter_error = current_error;
-        }
-    }
-
-    bk_wifi_deinit();
-    adp_state->init = 0;
-    adp_state->sta_started = 0;
-    adp_state->ap_started = 0;
-    adp_state->scan_started = 0;
-    adp_state->mode = SNF_WIFI_MODE_NONE;
-    adp_state->event_callback = NULL;
-    adp_state->event_user_data = NULL;
-
-    return adapter_error;
+    return snfMapSdkError(bk_wifi_sta_stop());
 }
 
-int snfWifiAdapterSetMode(SnfWifiMode mode)
+int snfWifiAdapterApStart(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    int adapter_error;
-    int sta_need_start = 0, ap_need_start = 0;
-    int sta_here_started = 0, ap_here_started = 0;
-
-    adapter_error = snfInitStateGet();
-    if (adapter_error != SNF_WIFI_ADAPTER_OK)
+    if (snfInitStateGet() != SNF_WIFI_ADAPTER_OK)
     {
-        return adapter_error;
+        return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
     }
 
-    if ((mode < SNF_WIFI_MODE_NONE) || (mode > SNF_WIFI_MODE_AP_STA))
-    {
-        return SNF_WIFI_ADAPTER_ERR_INVALID_PARAM;
-    }
-
-    if (mode == adp_state->mode)
-    {
-        return SNF_WIFI_ADAPTER_OK;
-    }
-
-    sta_need_start = ((mode == SNF_WIFI_MODE_STA) || (mode == SNF_WIFI_MODE_AP_STA));
-    ap_need_start = ((mode == SNF_WIFI_MODE_AP) || (mode == SNF_WIFI_MODE_AP_STA));
-
-    if (sta_need_start && (adp_state->sta_started == 0))
-    {
-        adapter_error = snfStartSta();
-        if (adapter_error != SNF_WIFI_ADAPTER_OK)
-        {
-            return adapter_error;
-        }
-        sta_here_started = 1;
-    }
-
-    if (ap_need_start && (adp_state->ap_started == 0))
-    {
-        adapter_error = snfStartAp();
-        if (adapter_error != SNF_WIFI_ADAPTER_OK)
-        {
-            if (sta_here_started)
-            {
-                (void)snfStopSta();
-            }
-
-            return adapter_error;
-        }
-        ap_here_started = 1;
-    }
-
-    if ((sta_need_start == 0) && (adp_state->sta_started != 0))
-    {
-        adapter_error = snfStopSta();
-        if (adapter_error != SNF_WIFI_ADAPTER_OK)
-        {
-            if (ap_here_started)
-            {
-                (void)snfStopAp();
-            }
-
-            return adapter_error;
-        }
-    }
-
-    if ((ap_need_start == 0) && (adp_state->ap_started != 0))
-    {
-        adapter_error = snfStopAp();
-        if (adapter_error != SNF_WIFI_ADAPTER_OK)
-        {
-            if (sta_here_started)
-            {
-                (void)snfStopSta();
-            }
-
-            return adapter_error;
-        }
-    }
-
-    adp_state->mode = mode;
-
-    return SNF_WIFI_ADAPTER_OK;
+    return snfMapSdkError(bk_wifi_ap_start());
 }
 
-int snfWifiAdapterGetMode(void)
+int snfWifiAdapterApStop(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
+    if (snfInitStateGet() != SNF_WIFI_ADAPTER_OK)
+    {
+        return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
+    }
 
-    return adp_state->mode;
+    return snfMapSdkError(bk_wifi_ap_stop());
+}
+
+int snfWifiAdapterStaIsStarted(void)
+{
+    return (adapter_state.init != 0) && wifi_sta_is_started();
+}
+
+int snfWifiAdapterApIsStarted(void)
+{
+    return (adapter_state.init != 0) && wifi_ap_is_started();
 }
 
 int snfWifiAdapterStaSetConfig(const SnfWifiStaConfig *config)
@@ -729,7 +490,6 @@ int snfWifiAdapterStaGetConfig(SnfWifiStaConfig *config)
 
 int snfWifiAdapterStaConnect(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
     bk_err_t sdk_error;
     int adapter_error;
 
@@ -739,7 +499,7 @@ int snfWifiAdapterStaConnect(void)
         return adapter_error;
     }
 
-    if (adp_state->sta_started == 0)
+    if (!wifi_sta_is_started())
     {
         return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
     }
@@ -786,6 +546,11 @@ int snfWifiAdapterStaGetLinkInfo(SnfWifiLinkInfo *info)
         return snfMapSdkError(sdk_error);
     }
 
+    if (sdk_status.aid < 0)
+    {
+        return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
+    }
+
     memset(info, 0, sizeof(*info));
     memcpy(info->ssid, sdk_status.ssid, sizeof(info->ssid) - 1U);
     info->ssid[sizeof(info->ssid) - 1U] = '\0';
@@ -820,26 +585,12 @@ int snfWifiAdapterStaGetRssi(int *rssi)
 
 int snfWifiAdapterScan(void)
 {
-    SnfWifiAdapterState *adp_state = &adapter_state;
-    bk_err_t sdk_error;
-
     if (snfInitStateGet() != SNF_WIFI_ADAPTER_OK)
     {
         return SNF_WIFI_ADAPTER_ERR_NOT_INIT;
     }
 
-    if (adp_state->scan_started != 0)
-    {
-        return SNF_WIFI_ADAPTER_ERR_BUSY;
-    }
-
-    sdk_error = bk_wifi_scan_start(NULL);
-    if (sdk_error == BK_OK)
-    {
-        adp_state->scan_started = 1;
-    }
-
-    return snfMapSdkError(sdk_error);
+    return snfMapSdkError(bk_wifi_scan_start(NULL));
 }
 
 int snfWifiAdapterScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count,
@@ -903,12 +654,12 @@ int snfWifiAdapterScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count,
 
 int snfWifiAdapterApSetConfig(const SnfWifiApConfig *config)
 {
-    netif_ip4_config_t ip_config = {0};
     wifi_ap_config_t sdk_config = {0};
     size_t ssid_length;
     size_t password_length;
     bk_err_t sdk_error;
     int adapter_error;
+    bool ap_was_started = wifi_ap_is_started();
 
     adapter_error = snfInitStateGet();
     if (adapter_error != SNF_WIFI_ADAPTER_OK)
@@ -938,18 +689,15 @@ int snfWifiAdapterApSetConfig(const SnfWifiApConfig *config)
         return SNF_WIFI_ADAPTER_ERR_INVALID_PARAM;
     }
 
-    strcpy(ip_config.ip,      SNF_DEFAULT_AP_IP_ADDR);
-    strcpy(ip_config.mask,    SNF_DEFAULT_AP_NETMASK);
-    strcpy(ip_config.gateway, SNF_DEFAULT_AP_GATEWAY);
-    strcpy(ip_config.dns,     SNF_DEFAULT_AP_DNS);
-
-    bk_netif_set_ip4_config(NETIF_IF_AP, &ip_config);
-
     memcpy(sdk_config.ssid, config->ssid, ssid_length + 1U);
     memcpy(sdk_config.password, config->password, password_length + 1U);
     sdk_config.channel = config->channel;
     sdk_config.max_con = config->max_connections;
     sdk_error = bk_wifi_ap_set_config(&sdk_config);
+    if ((sdk_error == BK_OK) && ap_was_started && !wifi_ap_is_started())
+    {
+        return SNF_WIFI_ADAPTER_ERR_INTERNAL;
+    }
 
     return snfMapSdkError(sdk_error);
 }
@@ -972,4 +720,51 @@ int snfWifiAdapterRegisterEventCallback(SnfWifiEventCB callback, void *user_data
     adp_state->event_user_data = user_data;
 
     return SNF_WIFI_ADAPTER_OK;
+}
+
+int snfWifiAdapterInit(void)
+{
+    SnfWifiAdapterState *adp_state = &adapter_state;
+    bk_err_t sdk_error;
+    wifi_init_config_t init_config;
+    int adapter_error;
+
+    if (adp_state->init != 0)
+    {
+        return SNF_WIFI_ADAPTER_OK;
+    }
+
+    sdk_error = bk_event_init();
+    if (sdk_error != BK_OK)
+    {
+        return snfMapSdkError(sdk_error);
+    }
+
+    if (!bk_get_wifi_is_inited())
+    {
+        init_config = (wifi_init_config_t)WIFI_DEFAULT_INIT_CONFIG();
+        sdk_error = bk_wifi_init(&init_config);
+        if (sdk_error != BK_OK)
+        {
+            return snfMapSdkError(sdk_error);
+        }
+    }
+
+    sdk_error = bk_event_register_cb(EVENT_MOD_WIFI, EVENT_ID_ALL,
+                                      snfSdkEventHandler, NULL);
+    if ((sdk_error != BK_OK) && (sdk_error != BK_ERR_EVENT_CB_EXIST))
+    {
+        adapter_error = snfMapSdkError(sdk_error);
+        return adapter_error;
+    }
+
+    adp_state->init = 1;
+
+    return SNF_WIFI_ADAPTER_OK;
+}
+
+int snfWifiAdapterDeinit(void)
+{
+    /* SDK的deinit尚未实现完整释放, 不能调用后再假报成功. */
+    return SNF_WIFI_ADAPTER_ERR_NOT_SUPPORTED;
 }

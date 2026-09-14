@@ -16,66 +16,46 @@
 #include "sonoff_wifi_type.h"
 
 /**
- * @brief WIFI管理任务外部事件.
- */
-typedef enum {
-    SNF_WIFI_EVT_STA_CONNECTING = 0,
-    SNF_WIFI_EVT_STA_CONNECTED,
-    SNF_WIFI_EVT_STA_CONNECT_FAILED,
-    SNF_WIFI_EVT_STA_DISCONNECTED,
-
-    SNF_WIFI_EVT_AP_STARTED,
-    SNF_WIFI_EVT_AP_START_FAILED,
-    SNF_WIFI_EVT_AP_STOPPED,
-
-    SNF_WIFI_EVT_SCAN_DONE,
-    SNF_WIFI_EVT_SCAN_FAILED,
-} SnfWifiExternalEventId;
-
-/**
- * @brief WIFI管理任务工作模式.
- */
-typedef enum {
-    SNF_WIFI_MANAGE_MODE_IDLE = 0,
-    SNF_WIFI_MANAGE_MODE_STA,
-    SNF_WIFI_MANAGE_MODE_AP,
-} SnfWifiManageMode;
-
-/**
- * @brief WIFI链路状态.
- */
-typedef enum {
-    SNF_WIFI_LINK_IDLE,
-    SNF_WIFI_LINK_CONNECTING,
-    SNF_WIFI_LINK_CONNECTED,
-    SNF_WIFI_LINK_DISCONNECTING,
-    SNF_WIFI_LINK_DISCONNECTED,
-} SnfWifiLinkStatus;
-
-/**
  * @brief 获取当前WIFI工作模式.
  *
- * @return 当前WIFI工作模式.
+ * 模式表示接口启用组合, STA断连不退出STA模式; 不包含尚未执行的请求.
+ *
+ * @return 当前WIFI工作模式, 未初始化时返回IDLE.
  */
 int snfWifiGetMode(void);
 
 /**
  * @brief 异步请求连接STA.
  *
+ * 保留AP, 配置在返回前复制; 请求按入队顺序执行.
+ *
  * @param [in] config - STA配置参数.
- * @return 0表示成功, 负数表示失败.
+ * @return 0表示请求已入队, 负数表示请求未接受.
  */
 int snfWifiStaConnect(const SnfWifiStaConfig *config);
 
 /**
  * @brief 异步请求断开STA.
  *
- * @return 0表示成功, 负数表示失败.
+ * 保留STA接口和AP; 请求按入队顺序执行.
+ *
+ * @return 0表示请求已入队, 负数表示请求未接受.
  */
 int snfWifiStaDisconnect(void);
 
 /**
- * @brief 获取当前STA连接信息.
+ * @brief 异步请求关闭STA接口, 保留AP.
+ *
+ * 请求按入队顺序执行, 成功关闭后链路状态为IDLE.
+ *
+ * @return 0表示请求已入队, 负数表示请求未接受.
+ */
+int snfWifiStaStop(void);
+
+/**
+ * @brief 通过适配器查询当前STA实际连接信息.
+ *
+ * SDK已建立链路时可查询, 不依赖连接事件是否已出队.
  *
  * @param [out] info - STA连接信息.
  * @return 0表示成功, 负数表示失败.
@@ -93,22 +73,37 @@ int snfWifiStaGetRssi(int *rssi);
 /**
  * @brief 异步请求启动AP.
  *
+ * 保留STA及其链路状态, 配置在返回前复制; 请求按入队顺序执行.
+ * AP已启动时按SDK规则重新配置AP, 共存信道由SDK协调.
+ *
  * @param [in] config - AP配置参数.
- * @return 0表示成功, 负数表示失败.
+ * @return 0表示请求已入队, 负数表示请求未接受.
  */
 int snfWifiApStart(const SnfWifiApConfig *config);
 
 /**
- * @brief 异步请求停止AP并进入IDLE模式.
+ * @brief 异步请求停止AP, 保留STA及其链路状态.
  *
- * @return 0表示成功, 负数表示失败.
+ * 请求按入队顺序执行.
+ *
+ * @return 0表示请求已入队, 负数表示请求未接受.
  */
 int snfWifiApStop(void);
 
 /**
+ * @brief 异步请求关闭STA和AP.
+ *
+ * 请求按入队顺序执行, 两侧分别尝试关闭; 部分失败时保留实际工作模式.
+ * 不反初始化模块, 不清除配置和扫描结果.
+ *
+ * @return 0表示请求已入队, 负数表示请求未接受.
+ */
+int snfWifiSetIdle(void);
+
+/**
  * @brief 异步请求启动WIFI扫描.
  *
- * @return 0表示成功, 负数表示失败.
+ * @return 0表示请求已入队, 负数表示请求未接受.
  */
 int snfWifiScan(void);
 
@@ -137,19 +132,26 @@ int snfWifiScanGetResults(SnfWifiLinkInfo *results, uint16_t max_count, uint16_t
 int snfWifiGetLinkStatus(void);
 
 /**
- * @brief 初始化WIFI状态管理任务.
- *
- * @return 0表示成功, 负数表示失败.
- */
-int snfWifiInit(void);
-
-/**
  * @brief 注册应用事件回调
+ *
+ * 回调在WIFI管理任务中执行且不持有状态锁, 可查询状态或提交新请求.
+ * event_data仅在回调期间有效: CONNECTED为SnfWifiLinkInfo,
+ * DISCONNECTED为SnfWifiStaDisconnectedEvent, 失败事件为int类型的适配层错误码,
+ * MODE_CHANGED为SnfWifiModeChangedEvent, 其他事件为NULL.
+ * 接口返回成功只表示请求入队, 执行结果通过回调通知.
+ * WIFI管理队列满时可能丢失通知, 调用方可查询当前状态.
  *
  * @param [in] callback - WIFI管理模块事件回调.
  * @param [in] user_data - 传递给回调函数的用户数据.
  * @return WIFI管理模块状态码.
  */
 int snfWifiRegisterEventCallback(SnfWifiEventCB callback, void *user_data);
+
+/**
+ * @brief 初始化WIFI状态管理任务.
+ *
+ * @return 0表示成功, 负数表示失败.
+ */
+int snfWifiInit(void);
 
 #endif /* __SONOFF_WIFI_H__ */
