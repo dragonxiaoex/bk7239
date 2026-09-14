@@ -21,6 +21,6 @@
 #define SONOFF_MATTER_HARDWARE_VERSION_STRING   "1.1.1"
 
 /* 项目配置宏 */
-#define SONOFF_DISABLE_LOG_RX                    1  /* 禁用调试串口接收 */
+#define SONOFF_DISABLE_LOG_RX                    0  /* 禁用调试串口接收 */
 
 #endif /* __SONOFF_PROJECT_CONFIG_H__ */

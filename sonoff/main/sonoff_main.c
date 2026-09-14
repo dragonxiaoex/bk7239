@@ -22,6 +22,7 @@
 #include "sonoff_nvdm.h"
 #include "sonoff_task_def.h"
 #include "sonoff_net_test.h"
+#include "sonoff_rpc.h"
 
 /** @brief 主任务日志标签. */
 static const char *tag = "SNF-MAIN";
@@ -161,6 +162,8 @@ int snfMainInit(void)
         LOG_E(tag, "network manager init failed, ret=%d", ret);
         return -6;
     }
+
+    snfRpcInit("sonoff-test", 3);
 
     /* only for net test */
     snfNetTestInit();

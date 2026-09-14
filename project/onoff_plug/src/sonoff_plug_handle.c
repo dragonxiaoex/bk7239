@@ -15,10 +15,84 @@
 #include "sonoff_log.h"
 #include "sonoff_plug_handle.h"
 #include "sonoff_private_item.h"
+#include "sonoff_rpc.h"
 
 static const char *tag = "SNF-PLUG";
 
-#define SNF_PLUG_CONTROL_GPIO GPIO_20
+#define SNF_PLUG_CONTROL_GPIO GPIO_18
+
+/**
+ * @brief 构造开关RPC的结果或错误包装对象.
+ * @param [in] code - SNF_RPC_OK表示成功，其他值为错误码.
+ * @return 独立JSON对象，分配失败返回NULL.
+ */
+static cJSON *plugRpcCreateResponse(int32_t code)
+{
+    cJSON *response = cJSON_CreateObject();
+    cJSON *payload = cJSON_CreateObject();
+
+    if ((response == NULL) || (payload == NULL))
+    {
+        cJSON_Delete(response);
+        cJSON_Delete(payload);
+        return NULL;
+    }
+
+    if (code == SNF_RPC_OK)
+    {
+        cJSON_AddItemToObjectCS(response, "result", payload);
+    }
+    else
+    {
+        cJSON_AddNumberToObject(payload, "code", code);
+        cJSON_AddStringToObject(payload, "message", code == SNF_RPC_ERR_INVALID_PARAMS
+                               ? "Expected params.id=0 and boolean params.on" : "Failed to set switch");
+        cJSON_AddItemToObjectCS(response, "error", payload);
+    }
+
+    return response;
+}
+
+cJSON *snfPlugRpcSwitchSet(const char *method, cJSON *params, void *user_ctx)
+{
+    cJSON *id;
+    cJSON *on;
+    cJSON *response;
+    uint32_t on_type;
+
+    if (!JSON_IS_OBJECT(params))
+    {
+        return plugRpcCreateResponse(SNF_RPC_ERR_INVALID_PARAMS);
+    }
+
+    id = cJSON_GetObjectItem(params, "id");
+    on = cJSON_GetObjectItem(params, "on");
+    if (!JSON_IS_NUMBER(id) || (id->valuedouble != 0) || (on == NULL))
+    {
+        return plugRpcCreateResponse(SNF_RPC_ERR_INVALID_PARAMS);
+    }
+
+    on_type = (uint32_t)on->type & JSON_TYPE_MASK;
+    if ((on_type != cJSON_True) && (on_type != cJSON_False))
+    {
+        return plugRpcCreateResponse(SNF_RPC_ERR_INVALID_PARAMS);
+    }
+
+    /* 先准备成功响应，分配失败时不改变开关；返回对象的所有权交给RPC。 */
+    response = plugRpcCreateResponse(SNF_RPC_OK);
+    if (response == NULL)
+    {
+        return NULL;
+    }
+
+    if (snfPlugOnOffSet(on_type == cJSON_True ? 1 : 0) != 0)
+    {
+        cJSON_Delete(response);
+        return plugRpcCreateResponse(SNF_RPC_ERR_INTERNAL);
+    }
+
+    return response;
+}
 
 int snfPlugOnOffRawSet(uint8_t onoff)
 {
@@ -50,6 +124,8 @@ int snfPlugOnOffSet(uint8_t onoff)
     {
         return -1;
     }
+
+    LOG_I(tag, "set plug onoff to %d", onoff);
 
     /* if (snfMatterOnOffReport(onoff) != 0)
     {
@@ -93,6 +169,8 @@ void snfPlugHandleInit(void)
     {
         bk_gpio_set_output_low(SNF_PLUG_CONTROL_GPIO);
     }
+
+    snfRpcMethodRegister("Switch.Set", snfPlugRpcSwitchSet, NULL);
 
     return;
 }

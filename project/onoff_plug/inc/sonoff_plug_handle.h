@@ -17,6 +17,17 @@ extern "C" {
 
 #include <stdint.h>
 
+#include "cJSON.h"
+
+/**
+ * @brief 处理Switch.Set请求，params必须包含id=0和布尔类型的on.
+ * @param [in] method - RPC方法名，由注册关系确定.
+ * @param [in] params - RPC参数对象，仅借用.
+ * @param [in] user_ctx - 注册上下文，当前不使用.
+ * @return 独立的result/error包装对象，所有权交给RPC；分配失败返回NULL.
+ */
+cJSON *snfPlugRpcSwitchSet(const char *method, cJSON *params, void *user_ctx);
+
 /**
  * @brief 设置插座开关(不向Matter上报).
  *
