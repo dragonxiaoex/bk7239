@@ -121,7 +121,11 @@
 #define SHELL_CMD_BUF_LEN        INBUF_SIZE
 /* sonoff modify end */
 #endif
+#if CONFIG_OPENTHREAD
+#define SHELL_RSP_BUF_LEN		256
+#else
 #define SHELL_RSP_BUF_LEN		140
+#endif
 #define SHELL_IND_BUF_LEN		132
 
 #define SHELL_RSP_QUEUE_ID	    (7)
@@ -466,6 +470,11 @@ static u32 wait_any_event(os_ext_event_t *ext_event, u32 timeout)
 		}
 	}
 
+}
+
+bool is_shell_task_event_clear(void)
+{
+    return (shell_task_event.event_flag == 0);
 }
 
 #else

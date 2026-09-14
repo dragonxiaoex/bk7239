@@ -8,6 +8,7 @@
 #include "ota_common.h"
 #include "partitions.h"
 #include "flash_reg.h"
+#include <driver/wdt.h>
 
 #define TAG "ota"
 
@@ -470,6 +471,7 @@ bk_err_t ota_update_back_pubkey_from_primary(const bk_logic_partition_t *app_par
 	uint8_t check_erase_buf[64];
 	uint8_t ff_buf[64];
 	bk_err_t ret = BK_OK;
+	bk_wdt_feed_all();
 	ota_pubkey_flash_ops_init();
 
 	ret = read_pubkey_from_primary(app_partition, primary_key, &primary_key_size);
@@ -619,6 +621,7 @@ static bk_err_t ota_verify_handle_tlv(const bk_logic_partition_t *partition, ota
 	}
 
 	while(tlv_off < tlv_pro_info.it_tlv_tot + tlv_info.it_tlv_tot) {
+		bk_wdt_feed_all();
 		if(tlv_off == tlv_pro_info.it_tlv_tot){
 			tlv_off += sizeof(image_tlv_info_t);
 		}
@@ -680,20 +683,20 @@ static bk_err_t ota_verify_handle_tlv(const bk_logic_partition_t *partition, ota
 		} else if(tlv.it_type == IMAGE_TLV_CUSTOM) {
 			memcpy(pubkey, value, tlv.it_len);
 			end = pubkey + tlv.it_len;
-#if CONFIG_OTA_UPDATE_PUBKEY
-			ret = ota_verify_pubkey(partition, ota_verify, pubkey, tlv.it_len);
-			if (ret != BK_OK) {
-				goto out;
-			}
-#else
-#ifdef OTP_BL2_BOOT_PUBLIC_KEY_HASH
+#if CONFIG_OTA_VERIFY_PUBKEY
+#if CONFIG_OTP_BL2_PUBKEY_HASH
 			uint8_t key_hash[32];
-			mbedtls_sha256_hash(value,tlv.it_len,key_hash);
+			mbedtls_sha256_hash(value, tlv.it_len, key_hash);
 			uint8_t pubkey_hash[32];
 			bk_otp_apb_read(OTP_BL2_BOOT_PUBLIC_KEY_HASH, pubkey_hash, 32);
 			if (memcmp(key_hash, pubkey_hash, 32) != 0) {
 				BK_LOGE(TAG, "incorrect public key hash!\r\n");
 				ret = BK_ERR_OTA_VALIDATE_PUB_KEY_FAIL;
+				goto out;
+			}
+#else
+			ret = ota_verify_pubkey(partition, ota_verify, pubkey, tlv.it_len);
+			if (ret != BK_OK) {
 				goto out;
 			}
 #endif

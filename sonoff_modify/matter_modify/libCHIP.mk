@@ -154,6 +154,7 @@ INCLUDES += -I$(CONFIG_DIR)
 # sonoff modify start
 INCLUDES += $(addprefix -I,$(shell find $(SONOFF_ROOT)/sonoff -type d))
 INCLUDES += -I$(PROJECT_DIR)/components/main/inc
+INCLUDES += -I$(BASEDIR)/components/json
 # sonoff modify end
 
 ifeq ($(EXTERNAL_PLATFORM), y)

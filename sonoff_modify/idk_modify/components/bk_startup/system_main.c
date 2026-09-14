@@ -45,6 +45,8 @@
 
 static beken_thread_function_t s_user_app_entry = NULL;
 beken_semaphore_t user_app_sema = NULL;
+static volatile uint8_t s_user_app_launch_ready = 0;
+static volatile uint32_t s_user_app_waiter_cnt = 0;
 
 void rtos_set_user_app_entry(beken_thread_function_t entry)
 {
@@ -53,7 +55,12 @@ void rtos_set_user_app_entry(beken_thread_function_t entry)
 
 void rtos_user_app_preinit(void)
 {
-    int ret = rtos_init_semaphore(&user_app_sema, 1);
+	s_user_app_launch_ready = 0;
+	s_user_app_waiter_cnt = 0;
+
+	/* maxCount must be >= max concurrent waiters of rtos_user_app_waiting_for_launch().
+ 	 * Currently 3 call sites in ty app; use 8 to leave headroom for future callers. */
+	int ret = rtos_init_semaphore(&user_app_sema, 8);
 	if(ret < 0){
 		os_printf("init queue failed");
 	}
@@ -62,33 +69,63 @@ void rtos_user_app_preinit(void)
 void rtos_user_app_launch_over(void)
 {
 	int ret;
+	uint32_t waiter_cnt = 0;
+
 	if(user_app_sema==NULL)
 	{
 		os_printf("user_app_sema is NULL");
 		return;
 	}
-	ret = rtos_set_semaphore(&user_app_sema);
-	if(ret < 0){
-		os_printf("set sema failed");
+
+	GLOBAL_INT_DECLARATION();
+	GLOBAL_INT_DISABLE();
+	if (s_user_app_launch_ready) {
+		GLOBAL_INT_RESTORE();
+		return;
+	}
+	s_user_app_launch_ready = 1;
+	waiter_cnt = s_user_app_waiter_cnt;
+	GLOBAL_INT_RESTORE();
+
+	for (uint32_t i = 0; i < waiter_cnt; i++) {
+		ret = rtos_set_semaphore(&user_app_sema);
+		if(ret < 0){
+			os_printf("set sema failed");
+			break;
+		}
 	}
 }
 
 void rtos_user_app_waiting_for_launch(void)
 {
 	int ret;
+	GLOBAL_INT_DECLARATION();
 	if(user_app_sema==NULL)
 	{
 		os_printf("user_app_sema is NULL");
 		return;
 	}
+
+	GLOBAL_INT_DISABLE();
+	if (s_user_app_launch_ready) {
+		GLOBAL_INT_RESTORE();
+		return;
+	}
+	s_user_app_waiter_cnt++;
+	GLOBAL_INT_RESTORE();
+
 	ret = rtos_get_semaphore(&user_app_sema, BEKEN_WAIT_FOREVER);
+
+	GLOBAL_INT_DISABLE();
+	if (s_user_app_waiter_cnt > 0) {
+		s_user_app_waiter_cnt--;
+	}
+	GLOBAL_INT_RESTORE();
+
 	if(ret < 0){
 		os_printf("get sema failed");
 	}
 
-#if CONFIG_SAVE_BOOT_TIME_POINT
-	save_mtime_point(CPU_APP_ENTRY_TIME);
-#endif
 }
 
 
@@ -339,8 +376,15 @@ void bk_set_jtag_mode(uint32_t cpu_id, uint32_t group_id) {
 static void user_app_thread( void *arg )
 {
 	rtos_user_app_waiting_for_launch();
+
+#if CONFIG_SAVE_BOOT_TIME_POINT
+	save_mtime_point(CPU_APP_ENTRY_TIME);
+#endif
+
 	/* add your user_main*/
+	/* sonoff modify start */
 	BK_LOGI(NULL, "user app entry(0x%p)\r\n", s_user_app_entry);
+	/* sonoff modify end */
 	if(NULL != s_user_app_entry) {
 		s_user_app_entry(0);
 	}
@@ -414,14 +458,6 @@ static void app_main_thread(void *arg)
 #endif
 /* sonoff modify start */
 /* Matter 由项目入口在模式选择后启动，避免产测模式下自动运行。 */
-#if 0
-#if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
-#ifdef CONFIG_MATTER_EXAMPLE
-	if (CONFIG_MATTER_EXAMPLE[0] != '\0')
-	    start_matter();
-#endif
-#endif //#if CONFIG_MATTER_START && CONFIG_SUPPORT_MATTER
-#endif
 /* sonoff modify end */
     if(ate_is_enabled())
     {
@@ -444,6 +480,26 @@ void start_app_main_thread(void)
 		(beken_thread_arg_t)0);
 }
 
+
+#if CONFIG_USING_CPP
+extern void *__init_array_start;
+extern void *__init_array_end;
+
+void __libc_init_array(void) {
+    void **ctor;
+
+    ctor = &__init_array_start;
+    while (ctor != &__init_array_end) {
+        void (*func)(void);
+
+        func = (void ( *)(void))(*(UINT32 *)ctor);
+
+        func();
+        ctor++;
+    }
+}
+#endif
+
 void entry_main(void)
 {
 #if CONFIG_SAVE_BOOT_TIME_POINT
@@ -453,7 +509,9 @@ void entry_main(void)
 	rtos_init();
 
 #if CONFIG_GCOV
-	__gcov_call_constructors();
+    __gcov_call_constructors();
+#elif CONFIG_USING_CPP
+    __libc_init_array();
 #endif
 
 #if (CONFIG_ATE_TEST)
